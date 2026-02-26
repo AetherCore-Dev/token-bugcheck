@@ -52,12 +52,34 @@ def main() -> None:
 
     from ag402_mcp import X402Gateway
 
+    # Build a PaymentVerifier with a real provider for production mode.
+    verifier = None
+    x402_mode = os.getenv("X402_MODE", "test").lower()
+    if x402_mode == "production":
+        solana_key = os.getenv("SOLANA_PRIVATE_KEY", "")
+        if not solana_key:
+            logger.error(
+                "[GATEWAY] X402_MODE=production but SOLANA_PRIVATE_KEY is not set! "
+                "Cannot start gateway without on-chain verification."
+            )
+            sys.exit(1)
+
+        from ag402_core.config import load_config as load_x402_config
+        from ag402_core.gateway.auth import PaymentVerifier
+        from ag402_core.payment.registry import PaymentProviderRegistry
+
+        x402_cfg = load_x402_config()
+        provider = PaymentProviderRegistry.get_provider(config=x402_cfg)
+        verifier = PaymentVerifier(provider=provider, config=x402_cfg)
+        logger.info("[GATEWAY] Production mode: on-chain payment verification enabled")
+
     gw = X402Gateway(
         target_url=target_url,
         price=cfg.ag402_price,
         chain=cfg.ag402_chain,
         token=cfg.ag402_token,
         address=cfg.ag402_address,
+        verifier=verifier,
     )
     app = gw.create_app()
 
