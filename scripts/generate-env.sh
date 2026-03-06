@@ -85,7 +85,7 @@ case "$MODE" in
 esac
 
 # --- Validate Solana address (base58, 32-44 characters) ---
-if ! echo "$ADDRESS" | grep -qP '^[1-9A-HJ-NP-Za-km-z]{32,44}$'; then
+if ! echo "$ADDRESS" | grep -qE '^[1-9A-HJ-NP-Za-km-z]{32,44}$'; then
     bail "VALIDATE" "Invalid Solana address format: '$ADDRESS' (must be base58, 32-44 chars)"
 fi
 log_ok "VALIDATE" "Address format valid: ${ADDRESS:0:8}...${ADDRESS: -4}"
@@ -106,7 +106,7 @@ fi
 # directly (e.g. for buyer-side payments or advanced verification flows).
 if [ "$MODE" != "test" ] && [ -n "$PRIVATE_KEY" ]; then
     # Basic base58 check (private keys are typically 64-88 chars)
-    if ! echo "$PRIVATE_KEY" | grep -qP '^[1-9A-HJ-NP-Za-km-z]{44,88}$'; then
+    if ! echo "$PRIVATE_KEY" | grep -qE '^[1-9A-HJ-NP-Za-km-z]{44,88}$'; then
         bail "VALIDATE" "Private key does not look like valid base58 (expected 44-88 chars)"
     fi
     log_ok "VALIDATE" "Private key format valid (${#PRIVATE_KEY} chars)"
@@ -144,7 +144,7 @@ if [ -n "$RPC_URL" ]; then
 fi
 
 # --- Validate price ---
-if ! echo "$PRICE" | grep -qP '^\d+(\.\d+)?$'; then
+if ! echo "$PRICE" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
     bail "VALIDATE" "Invalid price format: '$PRICE' (must be a number)"
 fi
 log_ok "VALIDATE" "Price: $PRICE USDC"

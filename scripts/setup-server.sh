@@ -34,14 +34,14 @@ log_info "PREFLIGHT" "Starting server setup on $(hostname) ($(uname -s) $(uname 
 
 # --- 1. Docker ---
 if command -v docker &>/dev/null; then
-    DOCKER_VER=$(docker --version 2>/dev/null | grep -oP '\d+\.\d+' | head -1)
+    DOCKER_VER=$(docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
     log_skip "DOCKER" "Already installed (v${DOCKER_VER})"
 else
     log_info "DOCKER" "Installing Docker..."
     if curl -fsSL https://get.docker.com | sh &>/dev/null; then
         systemctl enable docker &>/dev/null || true
         systemctl start docker &>/dev/null || true
-        DOCKER_VER=$(docker --version 2>/dev/null | grep -oP '\d+\.\d+' | head -1)
+        DOCKER_VER=$(docker --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
         log_ok "DOCKER" "Installed Docker v${DOCKER_VER}"
     else
         bail "DOCKER" "Docker installation failed"

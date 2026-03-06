@@ -71,7 +71,7 @@ while IFS='=' read -r key value; do
     # Trim whitespace
     value=$(echo "$value" | xargs)
     # Check for common placeholder patterns
-    if echo "$value" | grep -qP '<.*>|YOUR_|CHANGE_ME|TODO|FIXME'; then
+    if echo "$value" | grep -qE '<.*>|YOUR_|CHANGE_ME|TODO|FIXME'; then
         log_fail "PHASE1" "Placeholder found: $key=$value"
         PLACEHOLDERS=$((PLACEHOLDERS + 1))
     fi
