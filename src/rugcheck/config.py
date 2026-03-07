@@ -9,7 +9,12 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 # Placeholder that must be replaced by the user before production use.
-_PLACEHOLDER_ADDRESS = "<YOUR_SOLANA_WALLET_ADDRESS>"
+# Exported as a public constant so gateway.py can import it instead of
+# maintaining its own copy.
+PLACEHOLDER_ADDRESS = "<YOUR_SOLANA_WALLET_ADDRESS>"
+
+# Keep private alias for backward compat within this module.
+_PLACEHOLDER_ADDRESS = PLACEHOLDER_ADDRESS
 
 
 def _clamp(value: int, lo: int, hi: int) -> int:

@@ -558,7 +558,7 @@ ag402 info                   # Show protocol version
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest tests/ -v              # 78 tests
+python -m pytest tests/ -v              # 117 tests
 ruff check src/ tests/                  # Lint
 python examples/demo_agent.py           # E2E demo (direct mode)
 python examples/demo_agent.py --with-gateway  # E2E demo (with payment)
@@ -587,6 +587,10 @@ src/rugcheck/
 ### Security
 
 - **Rate limiting** — free users: daily quota (20/day per IP); paid users via gateway: 120/min per IP; `/stats`: 10/min per IP
+- **Real client IP resolution** — `CF-Connecting-IP` → `X-Forwarded-For` → socket IP; rate limits work correctly behind Cloudflare
+- **Unknown IP protection** — clients with unresolvable IPs are rate-limited (not bypassed)
+- **Production gateway fail-safe** — gateway refuses to start in production mode if payment verifier fails to initialize, preventing free access
+- **Cache deep-copy isolation** — `get()`/`set()` return independent copies; caller mutations never corrupt cached data
 - **Prometheus monitoring** — `/metrics` endpoint exposes request counts, latency histograms, upstream health, and cache hit rates
 - **Upstream protection** — `asyncio.Semaphore(20)` caps concurrent outbound API calls
 - **Error sanitization** — exceptions return categorized codes, never internal paths

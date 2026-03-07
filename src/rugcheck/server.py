@@ -55,8 +55,10 @@ class RateLimiter:
 
     async def check(self, client_ip: str) -> tuple[bool, int]:
         """Return (allowed, retry_after_seconds). retry_after is 0 when allowed."""
-        if client_ip == "unknown":
-            return True, 0
+        if not client_ip or client_ip == "unknown":
+            # Treat unidentifiable clients as a single bucket to prevent
+            # unlimited access when request.client is None.
+            client_ip = "__unknown__"
 
         async with self._lock:
             now = time.monotonic()
@@ -102,8 +104,9 @@ class DailyQuota:
 
     async def check(self, client_ip: str) -> tuple[bool, int]:
         """Return (allowed, remaining). remaining is 0 when exhausted."""
-        if client_ip == "unknown":
-            return True, self._max_daily
+        if not client_ip or client_ip == "unknown":
+            # Treat unidentifiable clients as a single bucket.
+            client_ip = "__unknown__"
 
         from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -139,6 +142,32 @@ class DailyQuota:
 
 # Loopback IPs — requests from the ag402 gateway running on the same host.
 GATEWAY_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
+
+
+def _resolve_client_ip(request: Request) -> str:
+    """Extract the real client IP from proxy headers.
+
+    Priority:
+      1. CF-Connecting-IP  (set by Cloudflare, single IP, trusted)
+      2. X-Forwarded-For   (leftmost = original client)
+      3. request.client.host (direct connection)
+
+    In our architecture Cloudflare is always the outermost proxy, so
+    CF-Connecting-IP is the most reliable source of the real client IP.
+    """
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        # Cloudflare always sends a single IP; strip whitespace
+        return cf_ip.strip()
+
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        # Leftmost IP is the original client
+        real_ip = xff.split(",")[0].strip()
+        if real_ip:
+            return real_ip
+
+    return request.client.host if request.client else "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -300,8 +329,13 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
         path = request.url.path
-        client_ip = request.client.host if request.client else "unknown"
-        is_loopback = client_ip in GATEWAY_IPS
+        # Use direct socket IP to determine if request came from gateway
+        socket_ip = request.client.host if request.client else "unknown"
+        is_loopback = socket_ip in GATEWAY_IPS
+        # Use real client IP (from proxy headers) for rate limiting.
+        # For loopback (paid via gateway): resolve real IP so per-user limits work.
+        # For non-loopback (free): also resolve real IP from proxy headers.
+        client_ip = _resolve_client_ip(request)
 
         if path.startswith("/audit"):
             if is_loopback:

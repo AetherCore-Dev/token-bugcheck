@@ -36,5 +36,8 @@ devnet_buyer_test.py
 mainnet_buyer_test.py
 consumer_test.py
 
+# Internal planning (not for public repo)
+TODO.md
+
 # Backup files
 backups/

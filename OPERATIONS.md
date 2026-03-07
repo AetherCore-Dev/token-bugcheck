@@ -208,7 +208,30 @@ docker system prune -f
 
 ---
 
-## 8. 已知问题
+## 8. 安全修复记录
+
+### v0.1.1 安全加固 (2025-06)
+
+修复了 4 个安全问题，新增 1 个测试模块，测试从 78 → 117 个：
+
+| # | 修复内容 | 文件 | 严重度 | 说明 |
+|---|----------|------|--------|------|
+| S1 | **生产模式网关不再静默降级为 mock** | `gateway.py` | 🔴 高 | 原行为：生产模式下 PaymentVerifier 初始化失败时自动降级为 mock（免费访问）。现行为：`sys.exit(1)` 拒绝启动，防止付费 API 被免费访问 |
+| S2 | **缓存深拷贝防止共享状态污染** | `cache.py` | 🟡 中 | `get()`/`set()` 现在使用 `model_copy(deep=True)`，防止调用者修改 metadata 后污染缓存中的原始数据 |
+| S3 | **未知 IP 不再绕过限流** | `server.py` | 🟡 中 | 原行为：`request.client` 为 None 时 `"unknown"` IP 被无条件放行。现行为：归入 `__unknown__` 统一桶限流 |
+| S4 | **代理真实 IP 解析** | `server.py` | 🟡 中 | 新增 `_resolve_client_ip()` 函数，按 `CF-Connecting-IP` → `X-Forwarded-For` → `request.client` 优先级解析，确保 Cloudflare 后的限流按真实 IP 生效 |
+| S5 | **PLACEHOLDER_ADDRESS 统一导出** | `config.py` | 🟢 低 | 占位地址常量从 `config.py` 导出，`gateway.py` 不再维护副本 |
+
+**新增测试**：
+
+| 测试文件 | 新增测试数 | 覆盖内容 |
+|----------|:---:|----------|
+| `test_security.py` | +7 | 网关生产模式崩溃、缓存深拷贝（get/set）、CF/XFF IP 解析、未知 IP 限流、占位地址导出 |
+| `test_payment_security.py` | +8 (新文件) | 402 挑战、伪造支付凭据拒绝、欠付拒绝、错误地址拒绝、重放攻击拒绝、过期凭据拒绝 |
+
+---
+
+## 9. 已知问题
 
 ### ag402 库的问题（上游，需等待更新）
 
@@ -217,7 +240,7 @@ docker system prune -f
 | A1 | `ag402 serve` 硬编码 host=127.0.0.1 | 🔴 高 | 自建 `gateway.py` 绕过 CLI |
 | A2 | uvloop 与 aiosqlite 冲突 | 🔴 高 | `UVLOOP_INSTALL=0` |
 | A3 | 缺 USDC ATA 时 403 无明确错误 | 🟡 中 | 文档提醒先创建 ATA |
-| A4 | 无私钥时 get_provider() 异常 | 🟡 中 | gateway.py catch + fallback |
+| A4 | ~~无私钥时 get_provider() 异常~~ | ✅ 已修复 | 生产模式直接拒绝启动 (S1) |
 | A5 | 无收入报表 API | 🟢 低 | 解析日志 |
 
 ### 需要人工处理的一次性事项

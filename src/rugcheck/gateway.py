@@ -12,8 +12,12 @@ Seller (provider) architecture note:
   payment challenges containing the seller's *public* receiving address.
   The *buyer* signs and broadcasts the on-chain payment.  The gateway then
   verifies the payment proof on-chain (read-only RPC, no private key).
-  When SOLANA_PRIVATE_KEY is absent, the gateway uses ag402's built-in
-  address-based verification (checks tx_hash on-chain via RPC).
+
+  In **production mode** (``X402_MODE=production``), the gateway requires
+  a fully initialised ``PaymentVerifier``.  If verification setup fails
+  (e.g. missing ``SOLANA_PRIVATE_KEY`` or crypto deps), the gateway
+  refuses to start (``sys.exit(1)``) to prevent free access to paid
+  services.  In test mode, ``verifier=None`` enables mock verification.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import sys
 
 import uvicorn
 
-from rugcheck.config import load_config
+from rugcheck.config import PLACEHOLDER_ADDRESS, load_config
 
 # Block uvloop before any import can install it.  aiosqlite (used by
 # PersistentReplayGuard) is incompatible with uvloop's event loop.
@@ -33,8 +37,8 @@ sys.modules.setdefault("uvloop", None)  # type: ignore[arg-type]
 
 logger = logging.getLogger(__name__)
 
-# Placeholder address used in .env.example — must be replaced by the user.
-_PLACEHOLDER_ADDRESS = "<YOUR_SOLANA_WALLET_ADDRESS>"
+# Re-exported from config for backward compat; canonical definition lives in config.py.
+_PLACEHOLDER_ADDRESS = PLACEHOLDER_ADDRESS
 
 
 def main() -> None:
@@ -85,21 +89,15 @@ def main() -> None:
             verifier = PaymentVerifier(provider=provider, config=x402_cfg)
             logger.info("[GATEWAY] Production mode: on-chain payment verification enabled")
         except Exception as exc:
-            # Seller doesn't need a private key — the gateway issues 402
-            # challenges with the public address; the buyer pays on-chain.
-            # Without SOLANA_PRIVATE_KEY, use mock provider so the gateway
-            # can still start and serve 402 challenges.  The X402Gateway
-            # requires a non-None verifier in production mode, so we fall
-            # back to mock adapter + force X402_MODE=test internally.
-            logger.warning(
-                "[GATEWAY] No SOLANA_PRIVATE_KEY — falling back to mock "
-                "payment verification (%s). 402 paywall is active; "
-                "on-chain verification is DISABLED.",
+            logger.critical(
+                "[GATEWAY] FATAL: Production mode requires a valid payment verifier "
+                "but initialization failed: %s. "
+                "Set SOLANA_PRIVATE_KEY or fix the provider configuration. "
+                "Refusing to start with mock verification in production — "
+                "this would allow free access to paid services.",
                 exc,
             )
-            os.environ["X402_MODE"] = "test"
-            mock_provider = PaymentProviderRegistry.get_provider(name="mock")
-            verifier = PaymentVerifier(provider=mock_provider, config=x402_cfg)
+            sys.exit(1)
 
     gw = X402Gateway(
         target_url=target_url,

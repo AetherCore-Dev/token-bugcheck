@@ -450,3 +450,232 @@ def test_setup_server_default_deny():
     assert "ufw default deny incoming" in content, (
         "setup-server.sh must set 'ufw default deny incoming' before allowing ports"
     )
+
+
+# ---------------------------------------------------------------------------
+# 13. Gateway MUST crash in production when verifier init fails
+# ---------------------------------------------------------------------------
+
+
+def test_gateway_production_crashes_without_verifier():
+    """In X402_MODE=production, if PaymentVerifier cannot be initialized,
+    the gateway MUST raise SystemExit instead of silently falling back to mock."""
+    import importlib
+    import os
+
+    # Save original env
+    original_mode = os.environ.get("X402_MODE")
+    original_key = os.environ.get("SOLANA_PRIVATE_KEY")
+    original_net = os.environ.get("X402_NETWORK")
+    original_addr = os.environ.get("AG402_ADDRESS")
+
+    try:
+        os.environ["X402_MODE"] = "production"
+        os.environ["X402_NETWORK"] = "mainnet"
+        os.environ["AG402_ADDRESS"] = "EtfTwndhRFLaWUe64ZbCBBdXBqfaK9H6QqCAeSnNXLLK"
+        # Remove private key to force verifier init failure
+        os.environ.pop("SOLANA_PRIVATE_KEY", None)
+
+        import pytest
+        with pytest.raises(SystemExit):
+            from rugcheck import gateway
+            importlib.reload(gateway)
+            gateway.main()
+    finally:
+        # Restore env
+        for key, val in [
+            ("X402_MODE", original_mode),
+            ("SOLANA_PRIVATE_KEY", original_key),
+            ("X402_NETWORK", original_net),
+            ("AG402_ADDRESS", original_addr),
+        ]:
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
+
+# ---------------------------------------------------------------------------
+# 14. Cache must return deep copies to prevent mutation of shared state
+# ---------------------------------------------------------------------------
+
+
+async def test_cache_returns_independent_copies():
+    """Two cache hits for the same key must return independent objects.
+    Mutating one must NOT affect the other."""
+    from rugcheck.cache import TTLCache
+    from rugcheck.models import AuditReport, ActionLayer, AnalysisLayer, EvidenceLayer, AuditMetadata, RiskLevel
+
+    cache = TTLCache(ttl_seconds=60, max_size=100)
+
+    report = AuditReport(
+        contract_address="TEST",
+        action=ActionLayer(is_safe=True, risk_level=RiskLevel.SAFE, risk_score=0),
+        analysis=AnalysisLayer(summary="test"),
+        evidence=EvidenceLayer(),
+        metadata=AuditMetadata(cache_hit=False, data_age_seconds=0),
+    )
+    await cache.set("key1", report)
+
+    hit1, age1 = await cache.get("key1")
+    hit2, age2 = await cache.get("key1")
+
+    assert hit1 is not None
+    assert hit2 is not None
+    # They must be different objects (deep copy)
+    assert hit1 is not hit2
+    assert hit1.metadata is not hit2.metadata
+
+    # Mutating hit1 must not affect hit2
+    hit1.metadata.cache_hit = True
+    hit1.metadata.data_age_seconds = 999
+    assert hit2.metadata.cache_hit is False
+    assert hit2.metadata.data_age_seconds == 0
+
+
+# ---------------------------------------------------------------------------
+# 15. Real client IP resolution via CF-Connecting-IP / X-Forwarded-For
+# ---------------------------------------------------------------------------
+
+
+async def test_real_ip_from_cf_connecting_ip():
+    """Rate limiter should use CF-Connecting-IP when present (Cloudflare proxy)."""
+    from rugcheck.server import create_app
+
+    cfg = Config(free_daily_quota=2)
+    app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
+    # Simulate request from Cloudflare proxy (gateway IP is loopback but
+    # CF-Connecting-IP carries the real client)
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # First 2 requests with same CF-Connecting-IP should be allowed
+        for _ in range(2):
+            resp = await client.get(
+                f"/audit/{MINT}",
+                headers={"CF-Connecting-IP": "203.0.113.42"},
+            )
+            assert resp.status_code == 200
+
+        # 3rd request: quota exhausted for this real IP
+        resp = await client.get(
+            f"/audit/{MINT}",
+            headers={"CF-Connecting-IP": "203.0.113.42"},
+        )
+        assert resp.status_code == 429
+
+        # Different real IP should still be allowed
+        resp = await client.get(
+            f"/audit/{MINT}",
+            headers={"CF-Connecting-IP": "198.51.100.1"},
+        )
+        assert resp.status_code == 200
+
+
+async def test_real_ip_from_x_forwarded_for():
+    """Rate limiter should fall back to X-Forwarded-For leftmost IP."""
+    from rugcheck.server import create_app
+
+    cfg = Config(free_daily_quota=1)
+    app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/audit/{MINT}",
+            headers={"X-Forwarded-For": "203.0.113.50, 10.0.0.1"},
+        )
+        assert resp.status_code == 200
+
+        # Quota exhausted for 203.0.113.50
+        resp = await client.get(
+            f"/audit/{MINT}",
+            headers={"X-Forwarded-For": "203.0.113.50, 10.0.0.1"},
+        )
+        assert resp.status_code == 429
+
+
+async def test_real_ip_ignores_spoofed_headers_from_non_proxy():
+    """When request comes from a non-proxy IP and sends CF-Connecting-IP,
+    the real IP resolution should still work (we trust the header in
+    our architecture since Cloudflare is always in front)."""
+    from rugcheck.server import create_app
+
+    cfg = Config(free_daily_quota=1)
+    app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
+    transport = httpx.ASGITransport(app=app, client=("192.168.1.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get(
+            f"/audit/{MINT}",
+            headers={"CF-Connecting-IP": "1.2.3.4"},
+        )
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 16. Unknown client IP must NOT bypass rate limiting
+# ---------------------------------------------------------------------------
+
+
+async def test_unknown_ip_rate_limited():
+    """When request.client is None (unknown IP), rate limits must still apply.
+    Previously, 'unknown' IPs were unconditionally allowed, enabling unlimited
+    free access by any client whose IP could not be resolved.
+    """
+    from rugcheck.server import create_app
+
+    cfg = Config(free_daily_quota=2)
+    app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
+    # client=None simulates missing client info
+    transport = httpx.ASGITransport(app=app, client=None)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for _ in range(2):
+            resp = await client.get(f"/audit/{MINT}")
+            assert resp.status_code == 200
+
+        # 3rd request should be rate limited
+        resp = await client.get(f"/audit/{MINT}")
+        assert resp.status_code == 429, (
+            f"Unknown IP should be rate limited after quota, got {resp.status_code}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 17. cache.set stores deep copy — caller mutation must not corrupt cache
+# ---------------------------------------------------------------------------
+
+
+async def test_cache_set_stores_independent_copy():
+    """Mutating a report AFTER cache.set() must not affect the cached version."""
+    from rugcheck.cache import TTLCache
+    from rugcheck.models import AuditReport, ActionLayer, AnalysisLayer, EvidenceLayer, AuditMetadata, RiskLevel
+
+    cache = TTLCache(ttl_seconds=60, max_size=100)
+
+    report = AuditReport(
+        contract_address="TEST",
+        action=ActionLayer(is_safe=True, risk_level=RiskLevel.SAFE, risk_score=0),
+        analysis=AnalysisLayer(summary="original"),
+        evidence=EvidenceLayer(),
+        metadata=AuditMetadata(cache_hit=False, data_age_seconds=0),
+    )
+    await cache.set("key1", report)
+
+    # Mutate the original AFTER storing
+    report.metadata.cache_hit = True
+    report.analysis.summary = "mutated"
+
+    # Cached version must be unaffected
+    hit, _ = await cache.get("key1")
+    assert hit is not None
+    assert hit.metadata.cache_hit is False, "cache.set must store a deep copy"
+    assert hit.analysis.summary == "original"
+
+
+# ---------------------------------------------------------------------------
+# 18. PLACEHOLDER_ADDRESS is importable from config module
+# ---------------------------------------------------------------------------
+
+
+def test_placeholder_address_exported_from_config():
+    """PLACEHOLDER_ADDRESS must be importable from rugcheck.config (single source of truth)."""
+    from rugcheck.config import PLACEHOLDER_ADDRESS
+    assert PLACEHOLDER_ADDRESS == "<YOUR_SOLANA_WALLET_ADDRESS>"

@@ -25,7 +25,11 @@ class TTLCache:
         self._lock = asyncio.Lock()
 
     async def get(self, key: str) -> tuple[AuditReport | None, float]:
-        """Return (report, data_age_seconds) or (None, 0) on miss."""
+        """Return (deep_copy_of_report, data_age_seconds) or (None, 0) on miss.
+
+        Returns a deep copy so callers can safely mutate metadata (e.g.
+        cache_hit, data_age_seconds) without corrupting the cached original.
+        """
         async with self._lock:
             entry = self._store.get(key)
             if entry is None:
@@ -42,13 +46,17 @@ class TTLCache:
             # Move to end (most recently used)
             self._store.move_to_end(key)
             self._hits += 1
-            return report, age
+            return report.model_copy(deep=True), age
 
     async def set(self, key: str, report: AuditReport) -> None:
+        """Store a deep copy of *report* so later mutations by the caller
+        (e.g. setting ``metadata.cache_hit = True``) cannot corrupt the
+        cached original.
+        """
         async with self._lock:
             if key in self._store:
                 self._store.move_to_end(key)
-            self._store[key] = (time.monotonic(), report)
+            self._store[key] = (time.monotonic(), report.model_copy(deep=True))
 
             # Evict oldest if over capacity
             while len(self._store) > self.max_size:
