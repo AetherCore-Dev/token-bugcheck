@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
+from rugcheck import __version__
 from rugcheck.cache import TTLCache
 from rugcheck.config import Config, load_config
 from rugcheck.engine.risk_engine import build_report
@@ -263,7 +264,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     app = FastAPI(
         title="Token RugCheck MCP",
         description="Solana token safety audit for AI agents — rug pull detection powered by ag402 micropayments",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -469,7 +470,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         result = {
             "status": status,
             "service": "token-rugcheck-mcp",
-            "version": "0.1.0",
+            "version": __version__,
         }
 
         if agg is not None and agg.last_success_time is not None:

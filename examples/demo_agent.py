@@ -113,7 +113,7 @@ async def main() -> None:
             price="0.05",
             chain="solana",
             token="USDC",
-            address="fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm",
+            address="EtfTwndhRFLaWUe64ZbCBBdXBqfaK9H6QqCAeSnNXLLK",
         )
         gw_app = gw.create_app()
         gateway_server = BackgroundServer(gw_app, GATEWAY_PORT)

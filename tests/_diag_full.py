@@ -78,7 +78,7 @@ async def main():
         gw = X402Gateway(
             target_url="http://127.0.0.1:18700",
             price="0.05",
-            address="fisJvtob3HfaTWoCynHLp9McFoFZ2gL3VEiA4p4QnNm",
+            address="EtfTwndhRFLaWUe64ZbCBBdXBqfaK9H6QqCAeSnNXLLK",
         )
         gw_app = gw.create_app()
         gw_srv = uvicorn.Server(uvicorn.Config(gw_app, host="127.0.0.1", port=18701, log_level="warning"))

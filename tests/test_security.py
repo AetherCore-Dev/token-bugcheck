@@ -11,8 +11,12 @@ Tests for:
 
 import asyncio
 import time
+from pathlib import Path
 
 import httpx
+
+# Project root — works regardless of where tests are invoked from
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 from rugcheck.config import Config
 from rugcheck.models import AggregatedData
@@ -422,7 +426,7 @@ async def test_no_server_version_header():
 
 def test_setup_server_no_public_8000():
     """setup-server.sh should NOT expose port 8000 to the public internet."""
-    with open("/workspace/scripts/setup-server.sh") as f:
+    with open(_PROJECT_ROOT / "scripts" / "setup-server.sh") as f:
         content = f.read()
     # 8000 should not be in REQUIRED_PORTS — it's bound to 127.0.0.1 only
     import re
@@ -441,7 +445,7 @@ def test_setup_server_no_public_8000():
 
 def test_setup_server_default_deny():
     """setup-server.sh should set ufw default deny incoming."""
-    with open("/workspace/scripts/setup-server.sh") as f:
+    with open(_PROJECT_ROOT / "scripts" / "setup-server.sh") as f:
         content = f.read()
     assert "ufw default deny incoming" in content, (
         "setup-server.sh must set 'ufw default deny incoming' before allowing ports"

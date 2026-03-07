@@ -5,13 +5,36 @@ dist/
 build/
 .eggs/
 *.egg
+
+# Environment & secrets
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Virtual environments
 .venv/
 venv/
+
+# Testing & tooling
 .pytest_cache/
 .ruff_cache/
-*.db
-*.sqlite
-.DS_Store
 .claude/
 test-ledger/
+
+# Data files
+*.db
+*.sqlite
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Sensitive test files (contain or may contain private keys)
+devnet_buyer_test.py
+mainnet_buyer_test.py
+consumer_test.py
+
+# Backup files
+backups/

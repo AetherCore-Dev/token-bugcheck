@@ -32,7 +32,7 @@ This runs the audit server directly without the payment gateway. Good for develo
 
 ## Deployment Guide
 
-> **AI-Agent Automated Deployment:** For automated deployment via AI coding agents (Claude Code, Cursor, etc.), see **[DEPLOY.md](DEPLOY.md)** and the `scripts/` automation toolkit. The agent collects your credentials, then handles server setup, configuration, and deployment automatically.
+> **Automated Deployment:** See **[OPERATIONS.md](OPERATIONS.md)** for one-click deployment scripts and the full ops runbook.
 
 The system has two roles:
 
