@@ -84,10 +84,21 @@ info "当前运行中的容器: $RUNNING"
 step "2/6" "拉取最新代码"
 
 GIT_OUTPUT=$(remote "cd $PROJECT_DIR && git pull origin main 2>&1") || true
-echo "$GIT_OUTPUT" | tail -5
-if echo "$GIT_OUTPUT" | grep -q "Already up to date"; then
+if echo "$GIT_OUTPUT" | grep -qE "Aborting|CONFLICT|error:|fatal:"; then
+    warn "git pull 失败，尝试自动 stash 后重试..."
+    STASH_OUTPUT=$(remote "cd $PROJECT_DIR && git stash --include-untracked && git pull origin main 2>&1") || true
+    if echo "$STASH_OUTPUT" | grep -qE "Aborting|CONFLICT|error:|fatal:"; then
+        fail "git pull 重试仍失败！请手动解决："
+        fail "  ssh root@${SERVER_IP}"
+        fail "  cd $PROJECT_DIR && git status"
+        exit 1
+    fi
+    echo "$STASH_OUTPUT" | tail -5
+    ok "git stash + pull 成功"
+elif echo "$GIT_OUTPUT" | grep -q "Already up to date"; then
     info "代码已是最新版本"
 else
+    echo "$GIT_OUTPUT" | tail -5
     ok "代码已更新"
 fi
 
@@ -119,11 +130,24 @@ fi
 step "4/6" "重新构建并启动服务"
 
 info "停止当前服务..."
-remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES down" 2>&1 || true
+remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES down --remove-orphans --timeout 30" 2>&1 || true
 
-info "构建 Docker 镜像..."
+# 强制清理残留容器和端口占用
+remote "docker ps -a --filter 'name=token-rugcheck' -q | xargs -r docker rm -f" 2>&1 || true
+for PORT in 80 8000; do
+    if remote "ss -tlnp 2>/dev/null | grep -q ':${PORT} '" 2>/dev/null; then
+        PID=$(remote "ss -tlnp 2>/dev/null | grep ':${PORT} ' | grep -oP 'pid=\K[0-9]+' | head -1" 2>/dev/null) || PID=""
+        if [ -n "$PID" ]; then
+            warn "端口 ${PORT} 仍被占用 (PID=$PID)，强制释放..."
+            remote "kill -9 $PID" 2>/dev/null || true
+            sleep 2
+        fi
+    fi
+done
+
+info "构建 Docker 镜像 (含 ag402 依赖更新)..."
 BUILD_START=$(date +%s)
-if remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES build" 2>&1 | tail -5; then
+if remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES build --no-cache" 2>&1 | tail -5; then
     BUILD_END=$(date +%s)
     ok "构建完成 ($(( BUILD_END - BUILD_START ))s)"
 else
@@ -208,7 +232,7 @@ fi
 GW_URL="${DOMAIN:+https://$DOMAIN}"
 GW_URL="${GW_URL:-http://${SERVER_IP}:80}"
 MINT="DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"
-PW_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$GW_URL/audit/$MINT" 2>/dev/null) || PW_HTTP="000"
+PW_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$GW_URL/v1/audit/$MINT" 2>/dev/null) || PW_HTTP="000"
 if [ "$PW_HTTP" = "402" ] || [ "$PW_HTTP" = "200" ]; then
     ok "功能测试正常 (audit=$PW_HTTP)"
     PASS=$((PASS + 1))

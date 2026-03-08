@@ -30,6 +30,7 @@ class Config:
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
+    production: bool = False
 
     # Cache
     cache_ttl_seconds: int = 3
@@ -79,6 +80,7 @@ def load_config() -> Config:
         host=os.getenv("RUGCHECK_HOST", "0.0.0.0"),
         port=int(os.getenv("RUGCHECK_PORT", "8000")),
         log_level=os.getenv("RUGCHECK_LOG_LEVEL", "info"),
+        production=os.getenv("RUGCHECK_PRODUCTION", "").lower() in ("1", "true", "yes"),
         cache_ttl_seconds=_clamp(int(os.getenv("CACHE_TTL_SECONDS", "3")), 0, 3600),
         cache_max_size=_clamp(int(os.getenv("CACHE_MAX_SIZE", "5000")), 1, 100_000),
         goplus_timeout=float(os.getenv("GOPLUS_TIMEOUT_SECONDS", "2.5")),

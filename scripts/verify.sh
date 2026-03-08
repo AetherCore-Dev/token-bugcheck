@@ -181,7 +181,7 @@ if should_run "L5"; then
     log_info "L5" "Using gateway=$GW_URL, audit=$AUDIT_URL"
 
     # L5.1: 402 paywall check
-    HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$GW_URL/audit/$MINT" 2>/dev/null) || HTTP="000"
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$GW_URL/v1/audit/$MINT" 2>/dev/null) || HTTP="000"
     if [ "$HTTP" = "402" ]; then
         log_ok "L5" "Gateway returns 402 Payment Required (paywall active)"
     elif [ "$HTTP" = "200" ]; then
@@ -191,7 +191,7 @@ if should_run "L5"; then
     fi
 
     # L5.2: Direct audit (bypassing gateway)
-    HTTP=$(curl -s -o /tmp/verify_audit.json -w "%{http_code}" --max-time 15 "$AUDIT_URL/audit/$MINT" 2>/dev/null) || HTTP="000"
+    HTTP=$(curl -s -o /tmp/verify_audit.json -w "%{http_code}" --max-time 15 "$AUDIT_URL/v1/audit/$MINT" 2>/dev/null) || HTTP="000"
     if [ "$HTTP" = "200" ]; then
         log_ok "L5" "Direct audit returned 200"
     else

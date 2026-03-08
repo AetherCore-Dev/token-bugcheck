@@ -67,7 +67,7 @@ def failing_app():
 
 async def test_audit_success(safe_app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=safe_app), base_url="http://test") as client:
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
 
     assert resp.status_code == 200
     data = resp.json()
@@ -86,25 +86,25 @@ async def test_audit_success(safe_app):
 
 async def test_audit_cache_hit(safe_app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=safe_app), base_url="http://test") as client:
-        resp1 = await client.get(f"/audit/{MINT}")
+        resp1 = await client.get(f"/v1/audit/{MINT}")
         assert resp1.status_code == 200
         assert resp1.json()["metadata"]["cache_hit"] is False
 
-        resp2 = await client.get(f"/audit/{MINT}")
+        resp2 = await client.get(f"/v1/audit/{MINT}")
         assert resp2.status_code == 200
         assert resp2.json()["metadata"]["cache_hit"] is True
 
 
 async def test_audit_invalid_address(safe_app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=safe_app), base_url="http://test") as client:
-        resp = await client.get("/audit/not-a-valid-address!!!")
+        resp = await client.get("/v1/audit/not-a-valid-address!!!")
     assert resp.status_code == 400
     assert "Invalid" in resp.json()["detail"]
 
 
 async def test_audit_all_sources_down(failing_app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=failing_app), base_url="http://test") as client:
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["metadata"]["data_completeness"] == "unavailable"
@@ -125,7 +125,7 @@ async def test_health(safe_app):
 async def test_stats(safe_app):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=safe_app), base_url="http://test") as client:
         # Make one request first
-        await client.get(f"/audit/{MINT}")
+        await client.get(f"/v1/audit/{MINT}")
         resp = await client.get("/stats")
     assert resp.status_code == 200
     stats = resp.json()
@@ -214,11 +214,11 @@ async def test_paid_rate_limit_loopback():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         for _ in range(5):
-            resp = await client.get(f"/audit/{MINT}")
+            resp = await client.get(f"/v1/audit/{MINT}")
             assert resp.status_code == 200
 
         # 6th request should be rate-limited
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
         assert resp.status_code == 429
 
 
@@ -311,7 +311,7 @@ async def test_data_age_zero_on_fresh():
     """Fresh (non-cached) responses should have data_age_seconds=0."""
     app = create_app(CONFIG, aggregator=FakeAggregator(_safe_data()))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
     assert resp.json()["metadata"]["data_age_seconds"] == 0
 
 
@@ -319,9 +319,9 @@ async def test_data_age_positive_on_cache_hit():
     """Cached responses should have data_age_seconds > 0 (or at least >= 0)."""
     app = create_app(CONFIG, aggregator=FakeAggregator(_safe_data()))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        await client.get(f"/audit/{MINT}")
+        await client.get(f"/v1/audit/{MINT}")
         time.sleep(0.05)  # small delay
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
     meta = resp.json()["metadata"]
     assert meta["cache_hit"] is True
     assert meta["data_age_seconds"] >= 0
@@ -348,7 +348,7 @@ async def test_audit_aggregate_timeout():
 
     app = create_app(CONFIG, aggregator=SlowAggregator())
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["metadata"]["data_completeness"] == "unavailable"
@@ -366,7 +366,7 @@ async def test_audit_aggregate_timeout():
 async def test_audit_success_not_degraded(safe_app):
     """Successful audit should have degraded=False."""
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=safe_app), base_url="http://test") as client:
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
     assert resp.status_code == 200
     data = resp.json()
     assert data["degraded"] is False
@@ -381,7 +381,7 @@ async def test_metrics_endpoint(safe_app):
     """GET /metrics should return Prometheus-formatted output."""
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=safe_app), base_url="http://test") as client:
         # Make a request to generate some metrics
-        await client.get(f"/audit/{MINT}")
+        await client.get(f"/v1/audit/{MINT}")
         resp = await client.get("/metrics")
     assert resp.status_code == 200
     body = resp.text
@@ -398,3 +398,21 @@ async def test_metrics_not_rate_limited():
         for _ in range(50):
             resp = await client.get("/metrics")
             assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# API versioning tests
+# ---------------------------------------------------------------------------
+
+
+async def test_legacy_audit_returns_deprecation_header(safe_app):
+    """/audit/{addr} (legacy) should return audit report with Deprecation header."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=safe_app),
+        base_url="http://test",
+    ) as client:
+        resp = await client.get(f"/audit/{MINT}")
+    assert resp.status_code == 200
+    assert resp.json()["contract_address"] == MINT
+    assert resp.headers.get("deprecation") == "true"
+    assert "/v1/audit/" in resp.headers.get("link", "")

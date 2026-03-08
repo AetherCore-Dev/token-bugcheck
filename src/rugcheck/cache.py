@@ -19,7 +19,8 @@ class TTLCache:
     def __init__(self, ttl_seconds: int = 300, max_size: int = 10_000):
         self.ttl = ttl_seconds
         self.max_size = max_size
-        self._store: OrderedDict[str, tuple[float, AuditReport]] = OrderedDict()
+        # Values: (timestamp, report, per_entry_ttl)
+        self._store: OrderedDict[str, tuple[float, AuditReport, int]] = OrderedDict()
         self._hits = 0
         self._misses = 0
         self._lock = asyncio.Lock()
@@ -36,9 +37,9 @@ class TTLCache:
                 self._misses += 1
                 return None, 0
 
-            ts, report = entry
+            ts, report, entry_ttl = entry
             age = time.monotonic() - ts
-            if age > self.ttl:
+            if age > entry_ttl:
                 del self._store[key]
                 self._misses += 1
                 return None, 0
@@ -48,15 +49,22 @@ class TTLCache:
             self._hits += 1
             return report.model_copy(deep=True), age
 
-    async def set(self, key: str, report: AuditReport) -> None:
+    async def set(self, key: str, report: AuditReport, *, ttl_override: int | None = None) -> None:
         """Store a deep copy of *report* so later mutations by the caller
         (e.g. setting ``metadata.cache_hit = True``) cannot corrupt the
         cached original.
+
+        Args:
+            ttl_override: If given, this entry expires after *ttl_override*
+                seconds instead of the cache-wide TTL.  Useful for caching
+                degraded reports with a shorter lifespan.
         """
+        effective_ttl = ttl_override if ttl_override is not None else self.ttl
         async with self._lock:
             if key in self._store:
                 self._store.move_to_end(key)
-            self._store[key] = (time.monotonic(), report.model_copy(deep=True))
+            # Store (timestamp, report, per-entry TTL)
+            self._store[key] = (time.monotonic(), report.model_copy(deep=True), effective_ttl)
 
             # Evict oldest if over capacity
             while len(self._store) > self.max_size:

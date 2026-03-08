@@ -21,7 +21,7 @@ Data sources: RugCheck.xyz + DexScreener + GoPlus Security (concurrent fetch, gr
 ```bash
 pip install -e ".[dev]"
 python -m rugcheck.main &
-curl http://localhost:8000/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+curl http://localhost:8000/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
 ```
 
 This runs the audit server directly without the payment gateway. Good for development and testing the audit logic itself.
@@ -90,7 +90,7 @@ ag402_core.enable()  # Activates auto-payment (mock in test mode)
 
 async def check_token(mint: str):
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"http://localhost:8001/audit/{mint}")
+        resp = await client.get(f"http://localhost:8001/v1/audit/{mint}")
         # Gateway returns 402 → ag402 auto-pays (mock) → returns audit data
         report = resp.json()
         print(f"Safe: {report['action']['is_safe']}, Risk: {report['action']['risk_score']}")
@@ -192,7 +192,7 @@ ag402_core.enable()
 
 async def check_token(mint: str):
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"http://<provider-host>:8001/audit/{mint}")
+        resp = await client.get(f"http://<provider-host>:8001/v1/audit/{mint}")
         report = resp.json()
 
         # Action: machine decision
@@ -222,11 +222,11 @@ ag402 balance
 # → should show SOL + USDC balance
 
 # 3. Gateway blocks unpaid requests?
-curl http://localhost:8001/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+curl http://localhost:8001/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
 # → HTTP 402 Payment Required
 
 # 4. Paid request succeeds?
-ag402 pay http://localhost:8001/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+ag402 pay http://localhost:8001/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
 # → HTTP 200 + audit report JSON
 
 # 5. Transaction recorded?
@@ -326,7 +326,7 @@ PROVIDER = "https://your-provider.example.com:8001"
 async def audit_watchlist(tokens: list[str]):
     async with httpx.AsyncClient(timeout=30.0) as client:
         for mint in tokens:
-            resp = await client.get(f"{PROVIDER}/audit/{mint}")
+            resp = await client.get(f"{PROVIDER}/v1/audit/{mint}")
             report = resp.json()
             action = report["action"]
             meta = report["metadata"]
@@ -405,11 +405,16 @@ docker compose up -d --build    # Rebuild after code changes
 
 ## API Reference
 
+### Versioning
+
+All API endpoints are versioned under `/v1/`. The legacy unversioned path (`/audit/{mint_address}`) still works as a deprecated alias but returns `Deprecation: true` and `Link` headers pointing to the new path. **Use `/v1/` paths for all new integrations.**
+
 ### Endpoints
 
 | Method | Path | Rate Limit | Description |
 |--------|------|------------|-------------|
-| GET | `/audit/{mint_address}` | Free: 20/day per IP; Paid (loopback): 120/min | Full safety audit report |
+| GET | `/v1/audit/{mint_address}` | Free: 20/day per IP; Paid (loopback): 120/min | Full safety audit report |
+| GET | `/audit/{mint_address}` | Same as above | **Deprecated** — alias for `/v1/audit/`, returns `Deprecation` header |
 | GET | `/health` | Unlimited | Service health + upstream status |
 | GET | `/stats` | 10/min per IP (non-loopback) | Request counts + cache hit rate |
 | GET | `/metrics` | Unlimited | Prometheus metrics endpoint |
@@ -494,6 +499,9 @@ All settings via environment variables. See `.env.example` for a complete templa
 | `RUGCHECK_HOST` | `0.0.0.0` | Bind address |
 | `RUGCHECK_PORT` | `8000` | Bind port |
 | `RUGCHECK_LOG_LEVEL` | `info` | `debug` / `info` / `warning` / `error` |
+| `RUGCHECK_PRODUCTION` | `false` | Set `true` to disable `/docs`, `/redoc`, `/openapi.json` |
+| `UVICORN_WORKERS` | `1` | Worker processes (>1 uses factory mode; cache is per-process) |
+| `UVICORN_LIMIT_CONCURRENCY` | `0` | Max concurrent connections per worker (0 = unlimited) |
 | `CACHE_TTL_SECONDS` | `3` | Cache TTL (seconds) — short to prevent stale data during rug pulls |
 | `CACHE_MAX_SIZE` | `5000` | Max cached entries (LRU eviction) |
 | `FREE_DAILY_QUOTA` | `20` | Max free audit requests per IP per day |
@@ -558,7 +566,7 @@ ag402 info                   # Show protocol version
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest tests/ -v              # 117 tests
+python -m pytest tests/ -v              # 118 tests
 ruff check src/ tests/                  # Lint
 python examples/demo_agent.py           # E2E demo (direct mode)
 python examples/demo_agent.py --with-gateway  # E2E demo (with payment)
@@ -587,20 +595,24 @@ src/rugcheck/
 ### Security
 
 - **Rate limiting** — free users: daily quota (20/day per IP); paid users via gateway: 120/min per IP; `/stats`: 10/min per IP
-- **Real client IP resolution** — `CF-Connecting-IP` → `X-Forwarded-For` → socket IP; rate limits work correctly behind Cloudflare
+- **Trusted proxy IP model** — `CF-Connecting-IP` / `X-Forwarded-For` headers are only trusted when the socket peer belongs to Cloudflare IP ranges or loopback; prevents IP spoofing to bypass rate limits
 - **Unknown IP protection** — clients with unresolvable IPs are rate-limited (not bypassed)
 - **Production gateway fail-safe** — gateway refuses to start in production mode if payment verifier fails to initialize, preventing free access
+- **Production mode hardening** — `RUGCHECK_PRODUCTION=true` disables `/docs`, `/redoc`, and `/openapi.json` endpoints
 - **Cache deep-copy isolation** — `get()`/`set()` return independent copies; caller mutations never corrupt cached data
+- **Degraded report short-TTL** — degraded (incomplete) reports are cached for only 10 seconds instead of the normal TTL, ensuring fresh data is fetched as soon as upstreams recover
+- **Prometheus path normalization** — unknown metric paths are collapsed to `"other"` to prevent cardinality explosion attacks
 - **Prometheus monitoring** — `/metrics` endpoint exposes request counts, latency histograms, upstream health, and cache hit rates
-- **Upstream protection** — `asyncio.Semaphore(20)` caps concurrent outbound API calls
+- **Upstream protection** — `asyncio.Semaphore(20)` caps concurrent outbound API calls; `httpx.Limits(max_connections=50)` caps HTTP connection pool
+- **DailyQuota cleanup** — background task evicts stale quota entries every hour, preventing unbounded memory growth
 - **Error sanitization** — exceptions return categorized codes, never internal paths
-- **Cache safety** — all cache operations are `asyncio.Lock`-guarded
+- **Cache safety** — all cache operations are `asyncio.Lock`-guarded; per-entry TTL support for degraded reports
 
 ### Design Notes
 
 - **Cache TTL 3s** — prevents stale data during pool drains; same-second agent bursts still hit cache
 - **Liquidity exemption** — tokens with >= $1M liquidity are exempt from LP-protection and holder-concentration rules, preventing false positives on BONK/WIF/JUP
-- **Single worker** — in-memory cache is per-process; use `--workers 1` (default) or switch to Redis for multi-worker
+- **Multi-worker support** — `UVICORN_WORKERS` controls worker count; note that in-memory cache is per-process, so workers > 1 will have independent caches (use Redis for shared state if needed)
 
 ## Troubleshooting
 

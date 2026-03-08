@@ -175,7 +175,7 @@ fi
 step "3/8" "服务器初始化 (Docker, 防火墙, 代码)"
 
 info "运行服务器初始化脚本..."
-SETUP_OUTPUT=$(remote 'bash -s' < "$SCRIPT_DIR/setup-server.sh" 2>&1) || true
+SETUP_OUTPUT=$(remote 'bash -s' < "$SCRIPT_DIR/setup-server.sh" 2>&1)
 SETUP_EXIT=$?
 
 echo "$SETUP_OUTPUT" | while IFS= read -r line; do
@@ -254,14 +254,44 @@ PRIVATE_KEY=""
 step "5/8" "构建 Docker 镜像 & 启动服务"
 
 info "拉取最新代码..."
-remote "cd $PROJECT_DIR && git pull origin main" 2>&1 | tail -3 || warn "git pull 可能需要注意"
+GIT_PULL_OUTPUT=$(remote "cd $PROJECT_DIR && git pull origin main 2>&1") || true
+if echo "$GIT_PULL_OUTPUT" | grep -qE "Aborting|CONFLICT|error:|fatal:"; then
+    warn "git pull 失败，尝试自动 stash 后重试..."
+    remote "cd $PROJECT_DIR && git stash --include-untracked && git pull origin main" 2>&1 | tail -5
+    GIT_RETRY_EXIT=$?
+    if [ "$GIT_RETRY_EXIT" -ne 0 ]; then
+        fail "git pull 重试失败！请手动解决："
+        fail "  ssh root@${SERVER_IP}"
+        fail "  cd $PROJECT_DIR && git status"
+        exit 1
+    fi
+    ok "git stash + pull 成功"
+else
+    echo "$GIT_PULL_OUTPUT" | tail -3
+    ok "代码已更新"
+fi
 
 info "停止旧服务..."
-remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES down" 2>&1 || true
+remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES down --remove-orphans --timeout 30" 2>&1 || true
 
-info "构建 Docker 镜像 (首次约 2-3 分钟)..."
+# 强制清理残留容器和端口占用
+info "清理残留容器..."
+remote "docker ps -a --filter 'name=token-rugcheck' -q | xargs -r docker rm -f" 2>&1 || true
+# 检查关键端口是否释放
+for PORT in 80 8000; do
+    if remote "ss -tlnp 2>/dev/null | grep -q ':${PORT} '" 2>/dev/null; then
+        PID=$(remote "ss -tlnp 2>/dev/null | grep ':${PORT} ' | grep -oP 'pid=\K[0-9]+' | head -1" 2>/dev/null) || PID=""
+        if [ -n "$PID" ]; then
+            warn "端口 ${PORT} 仍被占用 (PID=$PID)，尝试强制释放..."
+            remote "kill -9 $PID" 2>/dev/null || true
+            sleep 2
+        fi
+    fi
+done
+
+info "构建 Docker 镜像 + 更新 ag402 依赖 (首次约 2-3 分钟)..."
 BUILD_START=$(date +%s)
-if remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES build" 2>&1 | tail -10; then
+if remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES build --no-cache" 2>&1 | tail -10; then
     BUILD_END=$(date +%s)
     ok "Docker 镜像构建完成 ($(( BUILD_END - BUILD_START ))s)"
 else
@@ -399,7 +429,7 @@ if [ -n "$DOMAIN" ]; then
             "  1. 登录 Cloudflare Dashboard" \
             "  2. 确认 DNS A 记录: $(echo "$DOMAIN" | cut -d. -f1) → ${SERVER_IP}" \
             "  3. 确认 Proxy status: Proxied (橙色云朵)" \
-            "  4. SSL/TLS 加密模式: Flexible" \
+            "  4. SSL/TLS 加密模式: Flexible（推荐，源站无需 TLS 证书）" \
             "  5. 等待 DNS 传播 (通常 1-5 分钟)"
     else
         fail "V4: https://${DOMAIN}/health=$DOMAIN_HTTP"
@@ -419,7 +449,7 @@ if [ -n "$DOMAIN" ]; then
 else
     GW_URL="http://${SERVER_IP}:80"
 fi
-PAYWALL_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$GW_URL/audit/$MINT" 2>/dev/null) || PAYWALL_HTTP="000"
+PAYWALL_HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$GW_URL/v1/audit/$MINT" 2>/dev/null) || PAYWALL_HTTP="000"
 if [ "$MODE" = "test" ]; then
     if [ "$PAYWALL_HTTP" = "402" ] || [ "$PAYWALL_HTTP" = "200" ]; then
         ok "V5a: 支付墙=$PAYWALL_HTTP (test 模式)"
@@ -439,7 +469,7 @@ else
 fi
 
 # Direct audit (bypass gateway)
-AUDIT_HTTP2=$(remote "curl -s -o /dev/null -w '%{http_code}' --max-time 15 http://localhost:8000/audit/$MINT" 2>/dev/null) || AUDIT_HTTP2="000"
+AUDIT_HTTP2=$(remote "curl -s -o /dev/null -w '%{http_code}' --max-time 15 http://localhost:8000/v1/audit/$MINT" 2>/dev/null) || AUDIT_HTTP2="000"
 if [ "$AUDIT_HTTP2" = "200" ]; then
     ok "V5b: 直连审计=$AUDIT_HTTP2"
     VERIFY_PASS=$((VERIFY_PASS + 1))
@@ -449,7 +479,7 @@ else
 fi
 
 # Schema validation
-AUDIT_BODY=$(remote "curl -s --max-time 15 http://localhost:8000/audit/$MINT" 2>/dev/null) || AUDIT_BODY="{}"
+AUDIT_BODY=$(remote "curl -s --max-time 15 http://localhost:8000/v1/audit/$MINT" 2>/dev/null) || AUDIT_BODY="{}"
 SCHEMA_OK=true
 for field in contract_address action analysis evidence metadata; do
     if ! echo "$AUDIT_BODY" | grep -q "\"$field\""; then
@@ -466,7 +496,7 @@ else
 fi
 
 # Invalid address → 400
-INV_HTTP=$(remote "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8000/audit/INVALID!!!" 2>/dev/null) || INV_HTTP="000"
+INV_HTTP=$(remote "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8000/v1/audit/INVALID!!!" 2>/dev/null) || INV_HTTP="000"
 if [ "$INV_HTTP" = "400" ]; then
     ok "V5d: 无效地址=$INV_HTTP"
     VERIFY_PASS=$((VERIFY_PASS + 1))
@@ -523,7 +553,7 @@ if [ -n "$DOMAIN" ]; then
     printf "    curl -s https://%s/health | python3 -m json.tool\n" "$DOMAIN"
     printf "\n"
     printf "    # 402 支付墙验证\n"
-    printf "    curl -s -w '\\nHTTP: %%{http_code}\\n' https://%s/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263\n" "$DOMAIN"
+    printf "    curl -s -w '\\nHTTP: %%{http_code}\\n' https://%s/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263\n" "$DOMAIN"
 else
     printf "    # 健康检查\n"
     printf "    curl -s http://%s:80/health | python3 -m json.tool\n" "$SERVER_IP"

@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir .
 
 FROM python:3.12.8-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --shell /bin/bash appuser
 RUN mkdir -p /home/appuser/.ag402 && chown appuser:appuser /home/appuser/.ag402
 WORKDIR /app

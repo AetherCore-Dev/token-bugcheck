@@ -117,8 +117,16 @@ if [ -d "$INSTALL_DIR/.git" ]; then
         COMMIT=$(git rev-parse --short HEAD 2>/dev/null)
         log_ok "REPO" "Updated to $COMMIT"
     else
-        log_fail "REPO" "git pull failed — resolve conflicts manually"
-        exit 1
+        log_info "REPO" "git pull failed, trying stash + pull..."
+        git stash --include-untracked &>/dev/null || true
+        git clean -fd &>/dev/null || true
+        if git pull origin main &>/dev/null; then
+            COMMIT=$(git rev-parse --short HEAD 2>/dev/null)
+            log_ok "REPO" "Updated to $COMMIT (after stash)"
+        else
+            log_fail "REPO" "git pull failed even after stash — resolve conflicts manually"
+            exit 1
+        fi
     fi
     ALREADY_EXISTS=true
 else

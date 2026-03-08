@@ -157,7 +157,7 @@ async def test_stats_allowed_for_loopback():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # Make one audit request first to populate stats
-        await client.get(f"/audit/{MINT}")
+        await client.get(f"/v1/audit/{MINT}")
         resp = await client.get("/stats")
     assert resp.status_code == 200
 
@@ -186,20 +186,28 @@ async def test_circuit_breaker_opens_after_consecutive_failures():
         async def close(self) -> None:
             pass
 
+    # Use different mint addresses to avoid degraded-report cache hits
+    CB_MINTS = [
+        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+        "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+        "So11111111111111111111111111111111111111112",
+    ]
+
     cfg = Config(circuit_breaker_threshold=3, circuit_breaker_cooldown=60)
     app = create_app(cfg, aggregator=CountingAggregator())
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # 3 requests that all fail — should actually call aggregator
-        for _ in range(3):
-            resp = await client.get(f"/audit/{MINT}")
+        # 3 requests with different mints that all fail — should call aggregator each time
+        for i in range(3):
+            resp = await client.get(f"/v1/audit/{CB_MINTS[i]}")
             assert resp.status_code == 200
             assert resp.json()["degraded"] is True
 
         assert call_count == 3
 
         # 4th request: circuit breaker should be open, skip aggregator
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{CB_MINTS[3]}")
         assert resp.status_code == 200
         assert resp.json()["degraded"] is True
         # aggregator should NOT have been called again
@@ -238,13 +246,13 @@ async def test_circuit_breaker_resets_on_success():
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # 2 failures (different mints to avoid cache)
-        await client.get(f"/audit/{MINTS[0]}")
-        await client.get(f"/audit/{MINTS[1]}")
+        await client.get(f"/v1/audit/{MINTS[0]}")
+        await client.get(f"/v1/audit/{MINTS[1]}")
         # 1 success — should reset counter
-        resp = await client.get(f"/audit/{MINTS[2]}")
+        resp = await client.get(f"/v1/audit/{MINTS[2]}")
         assert resp.json()["degraded"] is False
         # Another failure — counter should be at 1, not 3
-        resp = await client.get(f"/audit/{MINTS[3]}")
+        resp = await client.get(f"/v1/audit/{MINTS[3]}")
         # Circuit should still be closed (only 1 failure since reset)
         assert idx == 4  # all 4 calls went through
 
@@ -391,11 +399,11 @@ async def test_loopback_audit_uses_paid_limiter_not_free():
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # Should be allowed up to paid_rate_limit (3)
         for _ in range(3):
-            resp = await client.get(f"/audit/{MINT}")
+            resp = await client.get(f"/v1/audit/{MINT}")
             assert resp.status_code == 200
 
         # 4th should be rate limited (429), NOT unlimited
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
         assert resp.status_code == 429
 
 
@@ -539,75 +547,87 @@ async def test_cache_returns_independent_copies():
 
 
 async def test_real_ip_from_cf_connecting_ip():
-    """Rate limiter should use CF-Connecting-IP when present (Cloudflare proxy)."""
+    """Rate limiter should use CF-Connecting-IP when socket peer is a trusted
+    Cloudflare proxy IP."""
     from rugcheck.server import create_app
 
     cfg = Config(free_daily_quota=2)
     app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
-    # Simulate request from Cloudflare proxy (gateway IP is loopback but
-    # CF-Connecting-IP carries the real client)
-    transport = httpx.ASGITransport(app=app, client=("192.168.1.1", 12345))
+    # Simulate request arriving through Cloudflare (use a real CF IP range)
+    transport = httpx.ASGITransport(app=app, client=("173.245.48.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         # First 2 requests with same CF-Connecting-IP should be allowed
         for _ in range(2):
             resp = await client.get(
-                f"/audit/{MINT}",
+                f"/v1/audit/{MINT}",
                 headers={"CF-Connecting-IP": "203.0.113.42"},
             )
             assert resp.status_code == 200
 
         # 3rd request: quota exhausted for this real IP
         resp = await client.get(
-            f"/audit/{MINT}",
+            f"/v1/audit/{MINT}",
             headers={"CF-Connecting-IP": "203.0.113.42"},
         )
         assert resp.status_code == 429
 
         # Different real IP should still be allowed
         resp = await client.get(
-            f"/audit/{MINT}",
+            f"/v1/audit/{MINT}",
             headers={"CF-Connecting-IP": "198.51.100.1"},
         )
         assert resp.status_code == 200
 
 
 async def test_real_ip_from_x_forwarded_for():
-    """Rate limiter should fall back to X-Forwarded-For leftmost IP."""
+    """Rate limiter should fall back to X-Forwarded-For leftmost IP when
+    socket peer is a trusted proxy."""
     from rugcheck.server import create_app
 
     cfg = Config(free_daily_quota=1)
     app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
-    transport = httpx.ASGITransport(app=app, client=("192.168.1.1", 12345))
+    # Use a Cloudflare IP as the socket peer so XFF is trusted
+    transport = httpx.ASGITransport(app=app, client=("104.16.0.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get(
-            f"/audit/{MINT}",
+            f"/v1/audit/{MINT}",
             headers={"X-Forwarded-For": "203.0.113.50, 10.0.0.1"},
         )
         assert resp.status_code == 200
 
         # Quota exhausted for 203.0.113.50
         resp = await client.get(
-            f"/audit/{MINT}",
+            f"/v1/audit/{MINT}",
             headers={"X-Forwarded-For": "203.0.113.50, 10.0.0.1"},
         )
         assert resp.status_code == 429
 
 
 async def test_real_ip_ignores_spoofed_headers_from_non_proxy():
-    """When request comes from a non-proxy IP and sends CF-Connecting-IP,
-    the real IP resolution should still work (we trust the header in
-    our architecture since Cloudflare is always in front)."""
+    """When request comes from a non-trusted socket peer (not Cloudflare/loopback),
+    CF-Connecting-IP and X-Forwarded-For headers should be IGNORED to prevent
+    IP spoofing. The socket IP should be used for rate limiting instead."""
     from rugcheck.server import create_app
 
     cfg = Config(free_daily_quota=1)
     app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
+    # Non-trusted socket peer — headers should be ignored
     transport = httpx.ASGITransport(app=app, client=("192.168.1.1", 12345))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # First request: allowed (rate-limited by socket IP 192.168.1.1)
         resp = await client.get(
-            f"/audit/{MINT}",
+            f"/v1/audit/{MINT}",
             headers={"CF-Connecting-IP": "1.2.3.4"},
         )
         assert resp.status_code == 200
+
+        # Second request: even with different CF-Connecting-IP, still
+        # rate-limited by the real socket IP (192.168.1.1)
+        resp = await client.get(
+            f"/v1/audit/{MINT}",
+            headers={"CF-Connecting-IP": "5.6.7.8"},
+        )
+        assert resp.status_code == 429
 
 
 # ---------------------------------------------------------------------------
@@ -628,11 +648,11 @@ async def test_unknown_ip_rate_limited():
     transport = httpx.ASGITransport(app=app, client=None)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         for _ in range(2):
-            resp = await client.get(f"/audit/{MINT}")
+            resp = await client.get(f"/v1/audit/{MINT}")
             assert resp.status_code == 200
 
         # 3rd request should be rate limited
-        resp = await client.get(f"/audit/{MINT}")
+        resp = await client.get(f"/v1/audit/{MINT}")
         assert resp.status_code == 429, (
             f"Unknown IP should be rate limited after quota, got {resp.status_code}"
         )

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import re
 import time
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
@@ -23,6 +25,40 @@ from rugcheck.fetchers.aggregator import Aggregator
 from rugcheck.models import AggregatedData, AuditReport, RiskLevel
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Trusted proxy networks — only trust CF-Connecting-IP / X-Forwarded-For
+# when the direct socket peer is one of these.
+# Source: https://www.cloudflare.com/ips/
+# ---------------------------------------------------------------------------
+
+_CLOUDFLARE_IPV4 = [
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
+    "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+    "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
+    "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+]
+_CLOUDFLARE_IPV6 = [
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32",
+    "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29",
+    "2c0f:f248::/32",
+]
+
+TRUSTED_PROXY_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network(cidr) for cidr in _CLOUDFLARE_IPV4 + _CLOUDFLARE_IPV6
+]
+
+
+def _is_trusted_proxy(ip_str: str) -> bool:
+    """Return True if *ip_str* belongs to a known trusted proxy (Cloudflare or loopback)."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if addr.is_loopback:
+        return True
+    return any(addr in net for net in TRUSTED_PROXY_NETWORKS)
 
 # Solana address: base58, 32-44 chars
 SOLANA_ADDR_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
@@ -102,13 +138,24 @@ class DailyQuota:
         self._counts: dict[str, tuple[str, int]] = {}
         self._lock = asyncio.Lock()
 
+    async def evict_stale(self) -> int:
+        """Remove entries from previous days. Returns number of evicted entries."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        async with self._lock:
+            stale_keys = [
+                ip for ip, (date_str, _) in self._counts.items()
+                if date_str != today
+            ]
+            for ip in stale_keys:
+                del self._counts[ip]
+            return len(stale_keys)
+
     async def check(self, client_ip: str) -> tuple[bool, int]:
         """Return (allowed, remaining). remaining is 0 when exhausted."""
         if not client_ip or client_ip == "unknown":
             # Treat unidentifiable clients as a single bucket.
             client_ip = "__unknown__"
 
-        from datetime import datetime, timezone
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         async with self._lock:
@@ -147,27 +194,30 @@ GATEWAY_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1"})
 def _resolve_client_ip(request: Request) -> str:
     """Extract the real client IP from proxy headers.
 
-    Priority:
-      1. CF-Connecting-IP  (set by Cloudflare, single IP, trusted)
+    SECURITY: Only trust CF-Connecting-IP and X-Forwarded-For when the
+    direct socket peer is a known trusted proxy (Cloudflare IP range or
+    loopback).  If the socket peer is untrusted, these headers can be
+    freely forged by the caller to bypass rate limiting.
+
+    Priority (when socket peer is trusted):
+      1. CF-Connecting-IP  (set by Cloudflare, single IP)
       2. X-Forwarded-For   (leftmost = original client)
       3. request.client.host (direct connection)
-
-    In our architecture Cloudflare is always the outermost proxy, so
-    CF-Connecting-IP is the most reliable source of the real client IP.
     """
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        # Cloudflare always sends a single IP; strip whitespace
-        return cf_ip.strip()
+    socket_ip = request.client.host if request.client else "unknown"
 
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        # Leftmost IP is the original client
-        real_ip = xff.split(",")[0].strip()
-        if real_ip:
-            return real_ip
+    if _is_trusted_proxy(socket_ip):
+        cf_ip = request.headers.get("cf-connecting-ip")
+        if cf_ip:
+            return cf_ip.strip()
 
-    return request.client.host if request.client else "unknown"
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            real_ip = xff.split(",")[0].strip()
+            if real_ip:
+                return real_ip
+
+    return socket_ip
 
 
 # ---------------------------------------------------------------------------
@@ -204,11 +254,26 @@ CACHE_MISS_TOTAL = Counter(
 )
 
 
+# Known static paths for metrics — everything else is bucketed as "other"
+# to prevent cardinality explosion from arbitrary 404 paths.
+_KNOWN_METRIC_PATHS: frozenset[str] = frozenset({"/health", "/stats", "/metrics", "/docs", "/redoc", "/openapi.json"})
+
+
 def _normalize_path(path: str) -> str:
-    """Collapse /audit/<dynamic> into /audit/{mint_address} to avoid cardinality explosion."""
-    if path.startswith("/audit/"):
-        return "/audit/{mint_address}"
-    return path
+    """Normalize path for Prometheus labels to prevent cardinality explosion.
+
+    Dynamic segments (mint addresses) are collapsed, and unknown paths
+    are bucketed into ``"other"`` to avoid unbounded label growth from
+    scanners hitting random URLs.
+    """
+    if "/audit/" in path:
+        return "/v1/audit/{mint_address}"
+    if path in _KNOWN_METRIC_PATHS:
+        return path
+    # Root path
+    if path == "/":
+        return "/"
+    return "other"
 
 
 def _record_upstream_metrics(data: AggregatedData) -> None:
@@ -248,6 +313,10 @@ def _build_degraded_report(
 # Internal-only endpoints — restricted to loopback
 # ---------------------------------------------------------------------------
 
+# Short TTL for degraded reports — prevents upstream stampede while still
+# allowing relatively quick recovery when upstreams come back.
+_DEGRADED_CACHE_TTL = 10  # seconds
+
 _INTERNAL_PATHS: frozenset[str] = frozenset({"/metrics", "/stats"})
 
 
@@ -278,23 +347,44 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     stats_limiter = RateLimiter(max_requests=10, window_seconds=60)
     free_daily = DailyQuota(max_daily=cfg.free_daily_quota)
 
+    async def _daily_quota_cleanup_loop() -> None:
+        """Periodically evict stale DailyQuota entries (every hour)."""
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                evicted = await free_daily.evict_stale()
+                if evicted:
+                    logger.info("[QUOTA] Evicted %d stale daily-quota entries", evicted)
+            except Exception:
+                logger.exception("[QUOTA] Error during daily-quota cleanup")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if state["aggregator"] is None:
             client = httpx.AsyncClient(
                 timeout=httpx.Timeout(10.0, connect=5.0),
+                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
             )
             state["aggregator"] = Aggregator(cfg, client=client)
+        # Background task: hourly cleanup of stale daily-quota entries
+        cleanup_task = asyncio.create_task(_daily_quota_cleanup_loop())
         logger.info("[SERVER] Audit service ready on %s:%d", cfg.host, cfg.port)
         yield
+        cleanup_task.cancel()
         if state["aggregator"] is not None:
             await state["aggregator"].close()
+
+    # Disable OpenAPI docs in production to reduce attack surface
+    docs_kwargs: dict = {}
+    if cfg.production:
+        docs_kwargs.update(docs_url=None, redoc_url=None, openapi_url=None)
 
     app = FastAPI(
         title="Token RugCheck MCP",
         description="Solana token safety audit for AI agents — rug pull detection powered by ag402 micropayments",
         version=__version__,
         lifespan=lifespan,
+        **docs_kwargs,
     )
 
     # ---- Middleware: Request-ID (outermost — runs first) ----
@@ -337,7 +427,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         # For non-loopback (free): also resolve real IP from proxy headers.
         client_ip = _resolve_client_ip(request)
 
-        if path.startswith("/audit"):
+        if path.startswith("/audit") or path.startswith("/v1/audit"):
             if is_loopback:
                 # Paid user via gateway — per-minute limit
                 allowed, retry_after = await paid_limiter.check(client_ip)
@@ -405,9 +495,11 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     def _cb_record_success() -> None:
         cb["consecutive_failures"] = 0
 
-    # ---- Routes ----
+    # ---- Versioned API routes (/v1/) ----
 
-    @app.get("/audit/{mint_address}", response_model=AuditReport)
+    v1 = APIRouter(prefix="/v1")
+
+    @v1.get("/audit/{mint_address}", response_model=AuditReport)
     async def audit(mint_address: str) -> AuditReport:
         state["total_requests"] += 1
 
@@ -429,7 +521,9 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
                 sources_succeeded=[],
                 sources_failed=["RugCheck", "DexScreener", "GoPlus"],
             )
-            return _build_degraded_report(mint_address, data, elapsed_ms=0)
+            report = _build_degraded_report(mint_address, data, elapsed_ms=0)
+            await cache.set(mint_address, report, ttl_override=_DEGRADED_CACHE_TTL)
+            return report
 
         agg = state["aggregator"]
         if agg is None:
@@ -449,6 +543,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
             _record_upstream_metrics(data)
             _cb_record_failure()
             report = _build_degraded_report(mint_address, data, elapsed_ms)
+            await cache.set(mint_address, report, ttl_override=_DEGRADED_CACHE_TTL)
             return report
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
@@ -457,6 +552,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         if not data.sources_succeeded:
             _cb_record_failure()
             report = _build_degraded_report(mint_address, data, elapsed_ms)
+            await cache.set(mint_address, report, ttl_override=_DEGRADED_CACHE_TTL)
             return report
 
         _cb_record_success()
@@ -473,6 +569,20 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
         await cache.set(mint_address, report)
         return report
+
+    app.include_router(v1)
+
+    # ---- Backward-compatible alias: /audit/{addr} serves the same handler ----
+    # Keeps gateway proxy working (no redirect hop) while signaling deprecation.
+
+    @app.get("/audit/{mint_address}", response_model=AuditReport, include_in_schema=False, deprecated=True)
+    async def audit_legacy(mint_address: str, response: Response) -> AuditReport:
+        """Legacy path — use /v1/audit/{mint_address} instead."""
+        response.headers["Deprecation"] = "true"
+        response.headers["Link"] = f'</v1/audit/{mint_address}>; rel="successor-version"'
+        return await audit(mint_address)
+
+    # ---- Operational endpoints (no versioning needed) ----
 
     @app.get("/health")
     async def health():

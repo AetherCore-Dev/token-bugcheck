@@ -136,9 +136,9 @@ async def main() -> None:
                 # 3a. Test gateway without payment — should get 402
                 print("-" * 64)
                 log("AG402", f"Testing gateway WITHOUT payment proof...")
-                log("AG402", f"GET {gateway_url}/audit/{BONK_MINT[:16]}...")
+                log("AG402", f"GET {gateway_url}/v1/audit/{BONK_MINT[:16]}...")
                 print("-" * 64)
-                resp_402 = await client.get(f"{gateway_url}/audit/{BONK_MINT}")
+                resp_402 = await client.get(f"{gateway_url}/v1/audit/{BONK_MINT}")
                 log("AG402", f"Status: {resp_402.status_code} (expected 402 Payment Required)")
                 if resp_402.status_code == 402:
                     log("AG402", "Payment gateway working correctly!")
@@ -157,11 +157,11 @@ async def main() -> None:
             query_url = gateway_url or base_url
             print("-" * 64)
             log("AUDIT", f"Querying token: BONK ({BONK_MINT[:16]}...)")
-            log("AUDIT", f"GET {query_url}/audit/{BONK_MINT}")
+            log("AUDIT", f"GET {query_url}/v1/audit/{BONK_MINT}")
             print("-" * 64)
 
             t0 = time.monotonic()
-            resp = await client.get(f"{query_url}/audit/{BONK_MINT}")
+            resp = await client.get(f"{query_url}/v1/audit/{BONK_MINT}")
             elapsed = time.monotonic() - t0
 
             if resp.status_code == 200:
@@ -203,7 +203,7 @@ async def main() -> None:
             print("-" * 64)
 
             t0 = time.monotonic()
-            resp2 = await client.get(f"{query_url}/audit/{BONK_MINT}")
+            resp2 = await client.get(f"{query_url}/v1/audit/{BONK_MINT}")
             elapsed2 = time.monotonic() - t0
 
             if resp2.status_code == 200:
@@ -216,7 +216,7 @@ async def main() -> None:
             print("-" * 64)
             log("INVALID", "Testing invalid address handling...")
             print("-" * 64)
-            resp3 = await client.get(f"{base_url}/audit/this-is-not-valid")
+            resp3 = await client.get(f"{base_url}/v1/audit/this-is-not-valid")
             log("INVALID", f"Status: {resp3.status_code} — {resp3.json()['detail']}")
 
             # 7. Stats
