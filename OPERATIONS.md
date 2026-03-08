@@ -378,6 +378,27 @@ curl -s http://localhost:8000/health
 
 ---
 
+### v0.1.3 主网上线 + 买方测试脚本 (2026-03)
+
+主网正式上线，地址 `https://rugcheck.aethercore.dev`。新增 `mainnet_buyer_test.py` 命令行审计工具。
+
+| # | 修改内容 | 文件 | 说明 |
+|---|----------|------|------|
+| F1 | **mainnet_buyer_test.py 改为 CLI 工具** | `mainnet_buyer_test.py` | 从硬编码 3 个 case 改为 `argparse` 接收任意 mint 地址；支持单个或多个代币；支持 `--gateway` 指定网关 |
+| F2 | **多源私钥加载** | `mainnet_buyer_test.py` | 不再强制 `export SOLANA_PRIVATE_KEY`；按优先级尝试：环境变量 → `~/.ag402/.env` → 解密 `~/.ag402/wallet.key`（ag402 setup 加密钱包） |
+| F3 | **修复 wallet.key 解密调用** | `mainnet_buyer_test.py` | 修复 `decrypt_private_key` 参数顺序错误：原来传 `(path, password)`，实际 API 是 `(password, encrypted_data_dict)`；需先调用 `load_encrypted_wallet(path)` 加载字典 |
+| F4 | **SOL 余额预检** | `mainnet_buyer_test.py` | Step 3 新增原生 SOL 余额检查（通过 Solana RPC），不足 0.01 SOL 时提前报错而非让交易失败 |
+| F5 | **SOL 余额属性名修复** | `mainnet_buyer_test.py` | `SolanaAdapter` 内部属性是 `_keypair`（带下划线），修复 `provider.keypair` → `provider._keypair` |
+| F6 | **InsufficientFundsForRent 错误识别** | `mainnet_buyer_test.py` | 交易失败时检测 `InsufficientFundsForRent` 错误，给出明确的 "SOL 不足" 提示而非通用 FAIL |
+| F7 | **README 重写** | `README.md` | 以正式上线为核心重写，突出体验地址、快速上手流程、API 响应示例 |
+
+**主网验证结果**：
+
+- BONK (`DezXAZ...B263`) — ✅ 审计成功，正确识别为 SAFE（risk_score=3）
+- TRUMP (`6p6x...GiPN`) — 交易确认超时（Solana 网络问题，非服务端问题）
+
+---
+
 ## 9. 已知问题
 
 ### ag402 库的问题（上游，需等待更新）
@@ -386,9 +407,11 @@ curl -s http://localhost:8000/health
 |---|------|--------|---------|
 | A1 | `ag402 serve` 硬编码 host=127.0.0.1 | 🔴 高 | 自建 `gateway.py` 绕过 CLI |
 | A2 | uvloop 与 aiosqlite 冲突 | 🔴 高 | `UVLOOP_INSTALL=0` |
-| A3 | 缺 USDC ATA 时 403 无明确错误 | 🟡 中 | 文档提醒先创建 ATA |
+| A3 | 缺 USDC ATA 时报 `InsufficientFundsForRent` | 🟡 中 | 确保买方钱包有 ≥0.01 SOL；`mainnet_buyer_test.py` 已增加 SOL 预检和明确提示 |
 | A4 | ~~无私钥时 get_provider() 异常~~ | ✅ 已修复 | 生产模式直接拒绝启动 (S1) |
 | A5 | 无收入报表 API | 🟢 低 | 解析日志 |
+| A6 | Solana 主网交易确认超时导致 403 | 🟡 中 | 网络瞬时问题，重试即可；网关返回 `Payment not confirmed on-chain` |
+| A7 | `ag402 run` 不自动解密 `wallet.key` | 🟡 中 | `mainnet_buyer_test.py` 已自行实现多源私钥加载（F2/F3） |
 
 ### 需要人工处理的一次性事项
 

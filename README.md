@@ -1,496 +1,319 @@
-# Token RugCheck MCP
+# Token RugCheck — Solana Token Safety Audit for AI Agents
 
-> **Disclaimer:** This software is provided for informational purposes only. It is **not financial advice (NFA)**. Token safety scores are based on automated heuristics and may be inaccurate, incomplete, or outdated. **You could lose money** relying on this data. Always do your own research (DYOR) and consult a qualified financial advisor before making any investment decisions. The authors accept no liability for losses incurred through the use of this tool.
+> **We're LIVE on Mainnet!** Try it now: [`https://rugcheck.aethercore.dev`](https://rugcheck.aethercore.dev)
 
-Solana token safety audit for AI Agents — detect rug pulls before your agent buys. Powered by [ag402](https://github.com/AetherCore-Dev/ag402) micropayments.
+```bash
+# Quick test — no setup needed
+curl https://rugcheck.aethercore.dev/health
 
-## What It Does
+# See the 402 paywall in action
+curl https://rugcheck.aethercore.dev/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+```
 
-Input a Solana token contract address, get a three-layer safety audit report:
+**What you get**: A three-layer safety audit for any Solana token — machine-readable verdict, LLM-friendly analysis, and raw evidence — all in one API call for **$0.02 USDC**.
 
-- **Action Layer** — machine-readable verdict (`is_safe`, `risk_score`, `risk_level`)
-- **Analysis Layer** — LLM-friendly risk summary with red/green flags
-- **Evidence Layer** — raw data for human cross-verification
+Powered by [ag402](https://github.com/AetherCore-Dev/ag402) on-chain micropayments.
 
-Data sources: RugCheck.xyz + DexScreener + GoPlus Security (concurrent fetch, graceful degradation).
+> **Disclaimer:** Not financial advice (NFA). Token safety scores are automated heuristics — may be inaccurate or outdated. DYOR. The authors accept no liability for losses.
 
 ---
 
-## Quick Start
+## Live Demos (Mainnet)
 
-```bash
-pip install -e ".[dev]"
-python -m rugcheck.main &
-curl http://localhost:8000/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
-```
+> All demos below are **real mainnet transactions** — left side is the client, right side is the production server logs.
 
-This runs the audit server directly without the payment gateway. Good for development and testing the audit logic itself.
+### 1. Wallet Setup (`ag402 setup`)
 
-> **Production mode** requires Solana crypto dependencies: `pip install -e ".[crypto]"` — see the [Deployment Guide](#deployment-guide) below.
+<video src="assets/setup_github.mp4" controls width="100%"></video>
 
----
+### 2. Auditing a Safe Token (BONK — risk score 3)
 
-## Deployment Guide
+<video src="assets/safe_github.mp4" controls width="100%"></video>
 
-> **Automated Deployment:** See **[OPERATIONS.md](OPERATIONS.md)** for one-click deployment scripts and the full ops runbook.
+### 3. Auditing a Risky Token (TRUMP — risk score 60)
 
-The system has two roles:
-
-- **Provider (Seller)** — runs the audit server + ag402 payment gateway, earns USDC per request
-- **Consumer (Buyer)** — an AI agent or script that pays for and consumes audit reports
-
-Below are step-by-step setup guides for three environments:
-
-| Environment | Blockchain | Real Funds | Use Case |
-|-------------|-----------|------------|----------|
-| **Test (mock)** | None | No | Local development, CI |
-| **Devnet** | Solana Devnet | No (free faucet) | Integration testing |
-| **Production** | Solana Mainnet | Yes | Live service |
+<video src="assets/risk_github.mp4" controls width="100%"></video>
 
 ---
 
-### Environment 1: Test / Mock (zero config)
+## How It Works
 
-No blockchain, no wallet, no funds. Payments are simulated.
-
-#### Provider Setup
-
-```bash
-# 1. Install
-pip install -e .
-
-# 2. Configure
-cp .env.example .env
-# Edit .env — set AG402_ADDRESS to your wallet address
-
-# 3. Start audit server
-python -m rugcheck.main &
-# Audit server running on http://localhost:8000
-
-# 4. Start payment gateway
-AG402_ADDRESS=<your_wallet_address> python -m rugcheck.gateway &
-# Gateway running on http://localhost:8001
+```
+Your AI Agent                        RugCheck Service
+     │                                      │
+     │  GET /v1/audit/{mint}                │
+     ├─────────────────────────────────────▶│
+     │                                      │
+     │  402 Payment Required                │
+     │  (pay 0.02 USDC on Solana)           │
+     │◀─────────────────────────────────────┤
+     │                                      │
+     │  USDC payment (on-chain)             │
+     ├─────────────────────────────────────▶│
+     │                                      │
+     │  200 OK + Audit Report               │
+     │◀─────────────────────────────────────┤
 ```
 
-#### Consumer Setup
+Input a Solana token mint address → get a three-layer report:
+
+| Layer | For | Content |
+|-------|-----|---------|
+| **Action** | Machines | `is_safe`, `risk_score` (0-100), `risk_level` (SAFE/LOW/MEDIUM/HIGH/CRITICAL) |
+| **Analysis** | LLMs | Summary, red flags, green flags |
+| **Evidence** | Humans | Price, liquidity, holder distribution, mint/freeze authority, raw data |
+
+Data sources: **RugCheck.xyz** + **DexScreener** + **GoPlus Security** (concurrent fetch, graceful degradation).
+
+---
+
+## Try It Now (3 minutes)
+
+### Step 1: Install
 
 ```bash
-# 1. Install
-pip install ag402-core httpx
-
-# 2. No wallet setup needed in test mode
+pip install "ag402-core[crypto]" httpx
 ```
+
+### Step 2: Set up your wallet
+
+```bash
+ag402 setup
+# Choose: Consumer → Mainnet
+# Enter your Solana private key (encrypted locally with AES)
+# Set safety limits (default: $10/day max)
+```
+
+### Step 3: Run an audit
+
+```bash
+# Command-line test script (included in this repo)
+python3 mainnet_buyer_test.py DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+```
+
+Or in Python:
 
 ```python
-import asyncio
-import httpx
-import ag402_core
+import asyncio, httpx, ag402_core
 
-ag402_core.enable()  # Activates auto-payment (mock in test mode)
+ag402_core.enable()  # Auto-handles 402 → pay → retry
 
 async def check_token(mint: str):
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(f"http://localhost:8001/v1/audit/{mint}")
-        # Gateway returns 402 → ag402 auto-pays (mock) → returns audit data
-        report = resp.json()
-        print(f"Safe: {report['action']['is_safe']}, Risk: {report['action']['risk_score']}")
-
-asyncio.run(check_token("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"))
-```
-
-#### Quick Smoke Test
-
-```bash
-# Run the built-in E2E demo (starts both servers automatically)
-python examples/demo_agent.py --with-gateway
-
-# Or run unit tests
-python -m pytest tests/ -v
-```
-
----
-
-### Environment 2: Devnet (real Solana, free funds)
-
-Real Solana transactions on Devnet. Free SOL and USDC from faucet.
-
-#### Provider Setup
-
-```bash
-# 1. Install (with Solana crypto dependencies for on-chain verification)
-pip install -e ".[crypto]"
-
-# 2. Run interactive setup wizard
-ag402 setup
-# Choose: Provider → Devnet
-# This generates a wallet and configures .env
-
-# 3. Edit .env — verify these values:
-```
-
-```bash
-# .env (provider — devnet)
-RUGCHECK_PORT=8000
-X402_MODE=production
-X402_NETWORK=devnet
-
-# Your provider wallet address (generated by ag402 setup)
-AG402_ADDRESS=<your_devnet_wallet_address>
-AG402_PRICE=0.05
-AG402_CHAIN=solana
-AG402_TOKEN=USDC
-
-# Provider's Solana private key (for on-chain payment verification)
-SOLANA_PRIVATE_KEY=<base58_private_key>
-SOLANA_RPC_URL=https://api.devnet.solana.com
-
-# Optional: GoPlus API keys for higher rate limits
-GOPLUS_APP_KEY=
-GOPLUS_APP_SECRET=
-```
-
-```bash
-# 4. Start audit server
-python -m rugcheck.main &
-
-# 5. Start payment gateway
-python -m rugcheck.gateway &
-
-# 6. Verify
-curl http://localhost:8000/health
-# → {"status": "ok", ...}
-```
-
-#### Consumer Setup
-
-```bash
-# 1. Install (with crypto for real on-chain payments)
-pip install "ag402-core[crypto]" httpx
-
-# 2. Run interactive setup wizard
-ag402 setup
-# Choose: Consumer → Devnet
-# This generates a wallet keypair
-
-# 3. Get free Devnet SOL + USDC
-ag402 init
-# Or manually: visit https://faucet.solana.com
-
-# 4. Check balance
-ag402 balance
-```
-
-> **`ag402 setup`** — interactive wizard that generates a Solana keypair and writes wallet config to `~/.ag402/config.toml`.
-> **`ag402 init`** — requests free SOL and USDC from the Solana devnet faucet to fund your wallet for testing.
-
-```python
-import asyncio
-import httpx
-import ag402_core
-
-ag402_core.enable()
-
-async def check_token(mint: str):
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(f"http://<provider-host>:8001/v1/audit/{mint}")
-        report = resp.json()
-
-        # Action: machine decision
-        if not report["action"]["is_safe"]:
-            print(f"DANGER — risk score {report['action']['risk_score']}/100")
-            return
-
-        # Freshness: check data age for quant strategies
-        age = report["metadata"]["data_age_seconds"]
-        if age and age > 10:
-            print(f"Warning: cached data ({age}s old)")
-
-        print(f"SAFE — {report['analysis']['summary']}")
-
-asyncio.run(check_token("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"))
-```
-
-#### Devnet Verification Checklist
-
-```bash
-# 1. Provider: audit server healthy?
-curl http://localhost:8000/health
-# → {"status": "ok", ...}
-
-# 2. Consumer: wallet funded?
-ag402 balance
-# → should show SOL + USDC balance
-
-# 3. Gateway blocks unpaid requests?
-curl http://localhost:8001/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
-# → HTTP 402 Payment Required
-
-# 4. Paid request succeeds?
-ag402 pay http://localhost:8001/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
-# → HTTP 200 + audit report JSON
-
-# 5. Transaction recorded?
-ag402 history --limit 1
-```
-
----
-
-### Environment 3: Production (Mainnet, real funds)
-
-Real USDC on Solana Mainnet.
-
-#### Provider Setup
-
-```bash
-# 1. Install (with Solana crypto dependencies for on-chain verification)
-pip install -e ".[crypto]"
-
-# 2. Run setup wizard
-ag402 setup
-# Choose: Provider → Production
-
-# 3. Configure .env:
-```
-
-```bash
-# .env (production provider)
-RUGCHECK_HOST=0.0.0.0
-RUGCHECK_PORT=8000
-RUGCHECK_LOG_LEVEL=warning
-
-X402_MODE=production
-X402_NETWORK=mainnet
-
-CACHE_TTL_SECONDS=3
-CACHE_MAX_SIZE=5000
-
-# Your mainnet USDC receiving address
-AG402_ADDRESS=<your_mainnet_wallet_address>
-AG402_PRICE=0.05
-AG402_CHAIN=solana
-AG402_TOKEN=USDC
-AG402_GATEWAY_PORT=8001
-
-# Recommended: GoPlus API keys for production rate limits
-GOPLUS_APP_KEY=<your_key>
-GOPLUS_APP_SECRET=<your_secret>
-
-# Provider's Solana private key (for payment verification)
-SOLANA_PRIVATE_KEY=<base58_private_key>
-SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-```
-
-```bash
-# 4a. Deploy with Docker (recommended)
-docker compose up -d
-
-# 4b. Or deploy manually
-python -m rugcheck.main &
-python -m rugcheck.gateway &
-```
-
-#### Consumer Setup
-
-```bash
-# 1. Install (with crypto for on-chain payments)
-pip install "ag402-core[crypto]" httpx
-
-# 2. Run setup wizard
-ag402 setup
-# Choose: Consumer → Production
-
-# 3. Configure wallet
-export SOLANA_PRIVATE_KEY=<your_base58_private_key>
-export SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-
-# 4. Set safety limits (optional, recommended)
-export X402_DAILY_LIMIT=10.0       # Max $10/day
-export X402_SINGLE_TX_LIMIT=1.0    # Max $1 per request
-export X402_PER_MINUTE_LIMIT=2.0   # Max $2/minute
-export X402_PER_MINUTE_COUNT=5     # Max 5 transactions/minute
-
-# 5. Fund wallet with SOL (for gas) and USDC (for payments)
-# Transfer SOL and USDC to your wallet address
-ag402 balance
-```
-
-```python
-import asyncio
-import httpx
-import ag402_core
-
-ag402_core.enable()
-
-PROVIDER = "https://your-provider.example.com:8001"
-
-async def audit_watchlist(tokens: list[str]):
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for mint in tokens:
-            resp = await client.get(f"{PROVIDER}/v1/audit/{mint}")
-            report = resp.json()
-            action = report["action"]
-            meta = report["metadata"]
-            print(f"{mint[:8]}... risk={action['risk_score']} "
-                  f"level={action['risk_level']} "
-                  f"age={meta['data_age_seconds']}s "
-                  f"sources={','.join(meta['data_sources'])}")
+        resp = await client.get(
+            f"https://rugcheck.aethercore.dev/v1/audit/{mint}"
+        )
+        report = resp.json()
+        action = report["action"]
 
-asyncio.run(audit_watchlist([
-    "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",  # BONK
-    "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",  # WIF
-]))
+        if not action["is_safe"]:
+            print(f"DANGER — risk score {action['risk_score']}/100")
+            for flag in report["analysis"]["red_flags"]:
+                print(f"  🚩 {flag['message']}")
+        else:
+            print(f"SAFE — {report['analysis']['summary']}")
+
+asyncio.run(check_token("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"))
 ```
 
-#### Production Checklist
-
-```bash
-# Provider-side checks
-curl https://your-server:8000/health          # → {"status": "ok"}
-curl https://your-server:8000/stats           # → request counts, cache hit rate
-
-# Consumer-side checks
-ag402 balance                                  # → sufficient SOL + USDC
-ag402 doctor                                   # → all checks pass
-ag402 status                                   # → status dashboard
-```
+**Requirements**: Your wallet needs **USDC** (for payments) and a small amount of **SOL** (for transaction fees, ~0.01 SOL).
 
 ---
 
-## Docker Deployment
+## `mainnet_buyer_test.py` — Command-line Audit Tool
 
-### Quick Start (Test Mode)
+A standalone script to audit any Solana token via the paid gateway.
 
 ```bash
-cp .env.example .env
-# Edit .env — set AG402_ADDRESS to your wallet address
-docker compose up -d
+# Audit one token
+python3 mainnet_buyer_test.py <mint_address>
+
+# Audit multiple tokens
+python3 mainnet_buyer_test.py <mint1> <mint2> <mint3>
+
+# Use a custom gateway
+python3 mainnet_buyer_test.py --gateway https://your-server.com <mint>
 ```
 
-### Production / Devnet Mode
+**Private key sources** (picks the first available):
+
+| Priority | Source | Setup |
+|----------|--------|-------|
+| 1 | `SOLANA_PRIVATE_KEY` env var | `export SOLANA_PRIVATE_KEY=<base58>` |
+| 2 | `~/.ag402/.env` | Written by `ag402 setup` |
+| 3 | `~/.ag402/wallet.key` (encrypted) | Created by `ag402 setup`, prompts for password |
 
 ```bash
-cp .env.example .env
-# Edit .env with production settings:
-#   X402_MODE=production
-#   X402_NETWORK=mainnet          (or devnet for testing)
-#   AG402_ADDRESS=<wallet>
-#   SOLANA_PRIVATE_KEY=<base58>   (see .env.example for format)
-#   SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
-docker compose up -d
-```
-
-> **Note:** The gateway Docker image already includes `ag402-core[crypto]` (Solana SDK).
-> No extra install step is needed for Docker-based production deployments.
-
-### Services
-
-Two services start:
-- `audit-server` on port 8000 — the audit API (Dockerfile, with rate limiting and health checks)
-- `ag402-gateway` on port 8001 — payment gateway (Dockerfile.gateway, persistent replay guard DB, healthcheck)
-
-The gateway uses a custom Python entry point (`rugcheck.gateway`) instead of `ag402 serve` CLI to avoid host-binding and uvloop/aiosqlite compatibility issues.
-
-### Operations
-
-```bash
-docker compose logs -f          # Watch logs
-docker compose ps               # Check status
-curl http://localhost:8000/health   # Verify audit server
-curl http://localhost:8001/health   # Verify gateway
-docker compose down             # Stop services
-docker compose up -d --build    # Rebuild after code changes
+# Non-interactive (CI/Docker)
+export AG402_UNLOCK_PASSWORD=<wallet_password>
+python3 mainnet_buyer_test.py DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
 ```
 
 ---
 
 ## API Reference
 
-### Versioning
-
-All API endpoints are versioned under `/v1/`. The legacy unversioned path (`/audit/{mint_address}`) still works as a deprecated alias but returns `Deprecation: true` and `Link` headers pointing to the new path. **Use `/v1/` paths for all new integrations.**
+**Base URL**: `https://rugcheck.aethercore.dev`
 
 ### Endpoints
 
-| Method | Path | Rate Limit | Description |
-|--------|------|------------|-------------|
-| GET | `/v1/audit/{mint_address}` | Free: 20/day per IP; Paid (loopback): 120/min | Full safety audit report |
-| GET | `/audit/{mint_address}` | Same as above | **Deprecated** — alias for `/v1/audit/`, returns `Deprecation` header |
-| GET | `/health` | Unlimited | Service health + upstream status |
-| GET | `/stats` | 10/min per IP (non-loopback) | Request counts + cache hit rate |
-| GET | `/metrics` | Unlimited | Prometheus metrics endpoint |
-
-Free users who exceed their daily quota receive `429` with a message directing them to the ag402 payment gateway. Paid users (routed through the gateway on localhost) have a higher per-minute limit.
-
-### Health Check
-
-```
-GET /health
-```
-
-| `status` | Meaning | Action |
-|----------|---------|--------|
-| `ok` | All systems normal (or idle — no requests yet) | — |
-| `degraded` | Upstream API failures detected recently | Check network / upstream APIs |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/v1/audit/{mint_address}` | USDC payment | Full safety audit report |
+| GET | `/health` | None | Service health + upstream status |
+| GET | `/stats` | Loopback only | Request counts + cache hit rate |
+| GET | `/metrics` | Loopback only | Prometheus metrics |
+| GET | `/audit/{mint_address}` | USDC payment | **Deprecated** — use `/v1/` |
 
 ### Audit Response Schema
 
 ```json
 {
-  "contract_address": "7X...",
+  "contract_address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
   "chain": "solana",
-  "audit_timestamp": "2025-01-15T12:34:56.789012+00:00",
+  "audit_timestamp": "2026-03-08T12:34:56.789012+00:00",
   "degraded": false,
   "action": {
-    "is_safe": false,
-    "risk_level": "CRITICAL",
-    "risk_score": 85
+    "is_safe": true,
+    "risk_level": "SAFE",
+    "risk_score": 3
   },
   "analysis": {
-    "summary": "...",
-    "red_flags": [{"level": "CRITICAL", "message": "..."}],
-    "green_flags": []
+    "summary": "No significant risk signals detected. Always do your own research (DYOR).",
+    "red_flags": [
+      {"level": "LOW", "message": "Token metadata is mutable — common for Solana tokens."}
+    ],
+    "green_flags": [
+      {"message": "Mint authority renounced (Mint Renounced)."},
+      {"message": "Liquidity pool is sufficiently protected (LP Burned or Locked)."},
+      {"message": "No freeze authority (Not Freezable)."}
+    ]
   },
   "evidence": {
+    "token_name": "Bonk",
+    "token_symbol": "Bonk",
     "price_usd": 0.00012,
-    "liquidity_usd": 8500.0,
-    "is_mintable": true
+    "liquidity_usd": 85000000.0,
+    "is_mintable": false
   },
   "metadata": {
-    "data_sources": ["RugCheck", "GoPlus", "DexScreener"],
+    "data_sources": ["RugCheck", "DexScreener", "GoPlus"],
     "data_completeness": "full",
     "cache_hit": false,
     "data_age_seconds": 0,
-    "response_time_ms": 1200,
-    "disclaimer": "This report is generated by automated data aggregation. Not financial advice (NFA). Trade at your own risk."
+    "response_time_ms": 738,
+    "disclaimer": "This report is generated by automated data aggregation. Not financial advice (NFA)."
   }
 }
 ```
 
-### Top-Level Fields
+### Key Fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `contract_address` | `string` | Solana token mint address |
-| `chain` | `string` | Always `"solana"` |
-| `audit_timestamp` | `string` | ISO 8601 timestamp of when the report was generated |
-| `degraded` | `bool` | `true` when all upstream sources failed — data is unavailable. Clients should treat `degraded` reports with extra caution: the risk verdict reflects missing data, not actual token analysis. |
+| `action.is_safe` | `bool` | Machine-readable verdict |
+| `action.risk_score` | `int` | 0 (safest) to 100 (most dangerous) |
+| `action.risk_level` | `string` | `SAFE` / `LOW` / `MEDIUM` / `HIGH` / `CRITICAL` |
+| `degraded` | `bool` | `true` if upstream sources failed — treat with extra caution |
+| `metadata.data_completeness` | `string` | `full` / `partial` / `minimal` / `unavailable` |
+| `metadata.data_age_seconds` | `int\|null` | `0` = fresh, `>0` = cached |
 
-### `metadata` Fields
+### Health Check
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `data_sources` | `string[]` | Which upstream APIs returned data |
-| `data_completeness` | `string` | `full` / `partial` / `minimal` / `unavailable` |
-| `cache_hit` | `bool` | Whether this response came from cache |
-| `data_age_seconds` | `int\|null` | `0` = fresh fetch, `>0` = seconds since original fetch |
-| `response_time_ms` | `int` | Server-side processing time |
-| `disclaimer` | `string` | Legal disclaimer (NFA) |
+```
+GET /health → {"status": "healthy", "mode": "production", "uptime_seconds": 4242.6}
+```
+
+| `status` | Meaning |
+|----------|---------|
+| `healthy` | All systems normal |
+| `degraded` | Upstream API failures — service continues with available data |
+
+---
+
+## Deployment Guide (Self-hosting)
+
+> **Automated Deployment**: See **[OPERATIONS.md](OPERATIONS.md)** for one-click scripts and ops runbook.
+
+### Architecture
+
+```
+Client (AI Agent)
+  │ HTTPS
+  ▼
+Cloudflare (SSL termination, DDoS protection)
+  │ HTTP:80
+  ▼
+┌─────────────────────────────────────────────┐
+│  Docker Compose                             │
+│  ┌─────────────┐     ┌──────────────────┐   │
+│  │ ag402-gateway│────▶│ rugcheck-audit   │   │
+│  │ :80 (public) │     │ :8000 (internal) │   │
+│  │ Payment gate │     │ Audit engine     │   │
+│  └─────────────┘     └──────────────────┘   │
+└─────────────────────────────────────────────┘
+```
+
+### Three Environments
+
+| Environment | Blockchain | Real Funds | Use Case |
+|-------------|-----------|------------|----------|
+| **Test (mock)** | None | No | Local dev, CI |
+| **Devnet** | Solana Devnet | No (faucet) | Integration testing |
+| **Production** | Solana Mainnet | **Yes** | Live service |
+
+### Quick Start — Test Mode (zero config)
+
+```bash
+pip install -e .
+python -m rugcheck.main &          # Audit server on :8000
+python -m rugcheck.gateway &       # Gateway on :8001 (mock payments)
+curl http://localhost:8001/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263
+```
+
+### Quick Start — Production (Docker)
+
+```bash
+# 1. One-click deploy to your server
+bash scripts/deploy-oneclick.sh
+
+# Or manually:
+cp .env.example .env               # Edit with your wallet address + keys
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+### Provider `.env` (Production)
+
+```bash
+X402_MODE=production
+X402_NETWORK=mainnet
+AG402_ADDRESS=<your_solana_wallet>  # Receives USDC payments
+AG402_PRICE=0.02                    # USDC per audit
+SOLANA_PRIVATE_KEY=<base58_key>     # For payment verification
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+
+# Optional: higher rate limits
+GOPLUS_APP_KEY=<key>
+GOPLUS_APP_SECRET=<secret>
+```
+
+### Consumer Setup
+
+```bash
+pip install "ag402-core[crypto]" httpx
+ag402 setup                         # Interactive wizard
+ag402 status                        # Verify wallet + balance
+```
+
+```python
+import ag402_core
+ag402_core.enable()
+# Now all httpx requests auto-handle 402 → pay → retry
+```
 
 ---
 
 ## Configuration Reference
-
-All settings via environment variables. See `.env.example` for a complete template.
 
 ### Service
 
@@ -499,46 +322,41 @@ All settings via environment variables. See `.env.example` for a complete templa
 | `RUGCHECK_HOST` | `0.0.0.0` | Bind address |
 | `RUGCHECK_PORT` | `8000` | Bind port |
 | `RUGCHECK_LOG_LEVEL` | `info` | `debug` / `info` / `warning` / `error` |
-| `RUGCHECK_PRODUCTION` | `false` | Set `true` to disable `/docs`, `/redoc`, `/openapi.json` |
-| `UVICORN_WORKERS` | `1` | Worker processes (>1 uses factory mode; cache is per-process) |
-| `UVICORN_LIMIT_CONCURRENCY` | `0` | Max concurrent connections per worker (0 = unlimited) |
-| `CACHE_TTL_SECONDS` | `3` | Cache TTL (seconds) — short to prevent stale data during rug pulls |
-| `CACHE_MAX_SIZE` | `5000` | Max cached entries (LRU eviction) |
-| `FREE_DAILY_QUOTA` | `20` | Max free audit requests per IP per day |
-| `PAID_RATE_LIMIT` | `120` | Max paid (loopback) audit requests per IP per minute |
+| `RUGCHECK_PRODUCTION` | `false` | `true` disables `/docs`, `/redoc`, `/openapi.json` |
+| `UVICORN_WORKERS` | `1` | Worker processes |
+| `CACHE_TTL_SECONDS` | `3` | Cache TTL (short to catch rug pulls) |
+| `CACHE_MAX_SIZE` | `5000` | Max cached entries (LRU) |
+| `FREE_DAILY_QUOTA` | `20` | Free requests per IP per day |
+| `PAID_RATE_LIMIT` | `120` | Paid requests per IP per minute |
 
-### Upstream API
+### Upstream APIs
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEXSCREENER_TIMEOUT_SECONDS` | `1.5` | DexScreener API timeout (CDN-backed, fastest) |
-| `GOPLUS_TIMEOUT_SECONDS` | `2.5` | GoPlus API timeout (commercial API) |
-| `RUGCHECK_API_TIMEOUT_SECONDS` | `3.5` | RugCheck API timeout (community API) |
-| `GOPLUS_APP_KEY` | _(empty)_ | GoPlus API key (optional, raises rate limit) |
-| `GOPLUS_APP_SECRET` | _(empty)_ | GoPlus API secret |
+| `DEXSCREENER_TIMEOUT_SECONDS` | `1.5` | DexScreener timeout |
+| `GOPLUS_TIMEOUT_SECONDS` | `2.5` | GoPlus timeout |
+| `RUGCHECK_API_TIMEOUT_SECONDS` | `3.5` | RugCheck timeout |
+| `GOPLUS_APP_KEY` | — | GoPlus API key (optional) |
+| `GOPLUS_APP_SECRET` | — | GoPlus API secret |
 
 ### ag402 Payment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AG402_PRICE` | `0.05` | USDC per audit request |
-| `AG402_ADDRESS` | — | Provider wallet address (receives payments) |
-| `AG402_CHAIN` | `solana` | Blockchain |
-| `AG402_TOKEN` | `USDC` | Payment token |
-| `AG402_GATEWAY_PORT` | `8001` | Gateway listen port |
-| `AG402_GATEWAY_HOST` | `0.0.0.0` | Gateway bind address |
-| `AG402_TARGET_URL` | `http://localhost:8000` | Upstream audit server URL (Docker: `http://audit-server:8000`) |
-| `X402_MODE` | `test` | `test` (mock payments) / `production` (real payments) |
-| `X402_NETWORK` | `devnet` | `mock` / `localnet` / `devnet` / `mainnet` |
-| `SOLANA_PRIVATE_KEY` | _(empty)_ | Base58-encoded wallet private key (production only, 88 chars) |
-| `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Solana RPC endpoint |
+| `AG402_PRICE` | `0.02` | USDC per request |
+| `AG402_ADDRESS` | — | Provider wallet (receives payments) |
+| `AG402_GATEWAY_PORT` | `8001` | Gateway port |
+| `X402_MODE` | `test` | `test` (mock) / `production` (real) |
+| `X402_NETWORK` | `devnet` | `mock` / `devnet` / `mainnet` |
+| `SOLANA_PRIVATE_KEY` | — | Base58 wallet private key |
+| `SOLANA_RPC_URL` | `https://api.devnet.solana.com` | Solana RPC |
 
 ### Consumer Safety Limits
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `X402_DAILY_LIMIT` | `10.0` | Max daily spend in USD |
-| `X402_SINGLE_TX_LIMIT` | `5.0` | Max per-transaction spend |
+| `X402_DAILY_LIMIT` | `10.0` | Max daily spend (USD) |
+| `X402_SINGLE_TX_LIMIT` | `5.0` | Max per-transaction |
 | `X402_PER_MINUTE_LIMIT` | `2.0` | Max spend per minute |
 | `X402_PER_MINUTE_COUNT` | `5` | Max transactions per minute |
 
@@ -546,18 +364,16 @@ All settings via environment variables. See `.env.example` for a complete templa
 
 ## ag402 CLI Reference
 
-Useful commands for both provider and consumer:
-
 ```bash
 ag402 setup                  # Interactive setup wizard
 ag402 status                 # Dashboard: mode, wallet, balance
-ag402 balance                # Check wallet SOL + USDC balance
+ag402 balance                # Check SOL + USDC balance
 ag402 doctor                 # Diagnose environment issues
 ag402 history --limit 10     # Recent transactions
-ag402 demo                   # Quick E2E test (mock mode)
-ag402 demo --devnet          # E2E test with real Devnet transactions
 ag402 pay <url>              # Send a single paid request
-ag402 info                   # Show protocol version
+ag402 demo                   # Quick E2E test (mock mode)
+ag402 demo --devnet          # E2E test with Devnet transactions
+ag402 info                   # Protocol version
 ```
 
 ---
@@ -568,11 +384,11 @@ ag402 info                   # Show protocol version
 pip install -e ".[dev]"
 python -m pytest tests/ -v              # 118 tests
 ruff check src/ tests/                  # Lint
-python examples/demo_agent.py           # E2E demo (direct mode)
+python examples/demo_agent.py           # E2E demo (direct)
 python examples/demo_agent.py --with-gateway  # E2E demo (with payment)
 ```
 
-## Architecture
+### Project Structure
 
 ```
 src/rugcheck/
@@ -581,107 +397,42 @@ src/rugcheck/
 ├── cache.py               # Async-safe TTL cache (LRU, asyncio.Lock)
 ├── server.py              # FastAPI app + rate limiter + health checks
 ├── main.py                # Audit server entry point
-├── gateway.py             # ag402 gateway entry point (replaces `ag402 serve`)
+├── gateway.py             # ag402 gateway entry point
 ├── fetchers/
-│   ├── base.py            # BaseFetcher ABC (sanitized errors)
-│   ├── goplus.py          # GoPlus Security API (supports auth)
+│   ├── base.py            # BaseFetcher ABC
+│   ├── goplus.py          # GoPlus Security API
 │   ├── rugcheck.py        # RugCheck.xyz API
 │   ├── dexscreener.py     # DexScreener API
-│   └── aggregator.py      # Concurrent fetch + merge + semaphore
+│   └── aggregator.py      # Concurrent fetch + merge
 └── engine/
     └── risk_engine.py     # Deterministic rule-based scoring
 ```
 
 ### Security
 
-- **Rate limiting** — free users: daily quota (20/day per IP); paid users via gateway: 120/min per IP; `/stats`: 10/min per IP
-- **Trusted proxy IP model** — `CF-Connecting-IP` / `X-Forwarded-For` headers are only trusted when the socket peer belongs to Cloudflare IP ranges or loopback; prevents IP spoofing to bypass rate limits
-- **Unknown IP protection** — clients with unresolvable IPs are rate-limited (not bypassed)
-- **Production gateway fail-safe** — gateway refuses to start in production mode if payment verifier fails to initialize, preventing free access
-- **Production mode hardening** — `RUGCHECK_PRODUCTION=true` disables `/docs`, `/redoc`, and `/openapi.json` endpoints
-- **Cache deep-copy isolation** — `get()`/`set()` return independent copies; caller mutations never corrupt cached data
-- **Degraded report short-TTL** — degraded (incomplete) reports are cached for only 10 seconds instead of the normal TTL, ensuring fresh data is fetched as soon as upstreams recover
-- **Prometheus path normalization** — unknown metric paths are collapsed to `"other"` to prevent cardinality explosion attacks
-- **Prometheus monitoring** — `/metrics` endpoint exposes request counts, latency histograms, upstream health, and cache hit rates
-- **Upstream protection** — `asyncio.Semaphore(20)` caps concurrent outbound API calls; `httpx.Limits(max_connections=50)` caps HTTP connection pool
-- **DailyQuota cleanup** — background task evicts stale quota entries every hour, preventing unbounded memory growth
-- **Error sanitization** — exceptions return categorized codes, never internal paths
-- **Cache safety** — all cache operations are `asyncio.Lock`-guarded; per-entry TTL support for degraded reports
+- **Rate limiting** — free: 20/day per IP; paid: 120/min per IP
+- **Trusted proxy model** — `CF-Connecting-IP` only trusted from Cloudflare IPs
+- **Production hardening** — `/docs`, `/redoc`, `/openapi.json` disabled
+- **Gateway fail-safe** — refuses to start if payment verifier fails in production
+- **Cache isolation** — deep-copy on get/set prevents shared state corruption
+- **Degraded short-TTL** — incomplete reports cached only 10s
+- **Prometheus path normalization** — prevents cardinality explosion
+- **Upstream protection** — `Semaphore(20)` + `max_connections=50`
+- **Error sanitization** — never exposes internal paths
 
-### Design Notes
-
-- **Cache TTL 3s** — prevents stale data during pool drains; same-second agent bursts still hit cache
-- **Liquidity exemption** — tokens with >= $1M liquidity are exempt from LP-protection and holder-concentration rules, preventing false positives on BONK/WIF/JUP
-- **Multi-worker support** — `UVICORN_WORKERS` controls worker count; note that in-memory cache is per-process, so workers > 1 will have independent caches (use Redis for shared state if needed)
+---
 
 ## Troubleshooting
 
-### Gateway crashes with `ValueError: Production mode requires PaymentVerifier`
-
-The gateway needs Solana crypto dependencies for production mode. Ensure you installed with the `crypto` extra:
-
-```bash
-# Local development
-pip install -e ".[crypto]"
-
-# Docker: already included in Dockerfile.gateway — rebuild if needed
-docker compose up -d --build
-```
-
-### `ImportError: No module named 'solana'` or `solders` or `base58`
-
-Same root cause — missing crypto dependencies:
-
-```bash
-pip install "ag402-core[crypto]"
-```
-
-### Gateway crashes with `SOLANA_PRIVATE_KEY is not set`
-
-When `X402_MODE=production`, you must provide a base58-encoded Solana private key:
-
-```bash
-# In .env:
-SOLANA_PRIVATE_KEY=<your_88_char_base58_key>
-```
-
-Generate a new keypair: `solana-keygen new --no-bip39-passphrase`
-
-### `402 Payment Required` when accessing the gateway
-
-This is expected behavior. The gateway requires payment for each audit request. Use `ag402_core.enable()` in your Python client, or `ag402 pay <url>` from the CLI.
-
-### Docker: gateway container keeps restarting
-
-Check logs for the specific error:
-
-```bash
-docker compose logs ag402-gateway
-```
-
-Common causes:
-1. Missing `SOLANA_PRIVATE_KEY` in `.env` (when `X402_MODE=production`)
-2. `AG402_ADDRESS` still set to placeholder `<YOUR_SOLANA_WALLET_ADDRESS>`
-3. Audit server not healthy yet — the gateway waits for `audit-server` health check
-
-### Devnet: `Insufficient balance` or payment failures
-
-1. Ensure you have devnet SOL (for gas) and USDC:
-   ```bash
-   ag402 balance
-   ag402 init    # Request free devnet tokens
-   ```
-2. Verify your `SOLANA_RPC_URL` points to devnet: `https://api.devnet.solana.com`
-3. Check that `X402_NETWORK=devnet` (not `mock` or `mainnet`)
-
-### Health check returns `degraded`
-
-One or more upstream APIs (RugCheck, GoPlus, DexScreener) are failing. The service continues to work with available data sources. Check:
-
-```bash
-curl http://localhost:8000/health
-# Look at the "upstreams" field for details
-```
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `402 Payment Required` | Expected — gateway requires USDC payment | Use `ag402_core.enable()` or `ag402 pay <url>` |
+| `InsufficientFundsForRent` | Wallet SOL too low for ATA creation | Send ≥ 0.01 SOL to your wallet |
+| `Payment not confirmed on-chain` (403) | Solana network confirmation timeout | Retry — transient network issue |
+| `ValueError: Production mode requires PaymentVerifier` | Missing crypto deps | `pip install -e ".[crypto]"` |
+| `ImportError: solana/solders` | Missing crypto deps | `pip install "ag402-core[crypto]"` |
+| Gateway keeps restarting | Missing `SOLANA_PRIVATE_KEY` or `AG402_ADDRESS` | Check `.env` configuration |
+| Health returns `degraded` | Upstream APIs failing | Service continues with available sources — check `/health` |
 
 ---
 

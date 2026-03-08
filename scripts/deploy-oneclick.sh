@@ -44,9 +44,37 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECT_DIR="/opt/token-rugcheck"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
 
-# --- Remote exec helper ---
+# --- Remote exec helper (SSH ControlMaster for connection reuse) ---
+# A single TCP connection is shared across all remote() calls, avoiding
+# repeated SSH handshakes that trigger "banner exchange timeout" on servers
+# with MaxStartups limits or flaky networks.
+# Use /tmp with a short name — macOS limits Unix domain socket paths to
+# 104 bytes; the default $TMPDIR (/var/folders/…) is too long.
+SSH_CONTROL_DIR="/tmp/.ssh-deploy-$$"
+mkdir -p "$SSH_CONTROL_DIR"
+SSH_CONTROL_PATH="${SSH_CONTROL_DIR}/s"
+
+_ssh_opts=(
+    -o ConnectTimeout=30
+    -o StrictHostKeyChecking=accept-new
+    -o ServerAliveInterval=15
+    -o ServerAliveCountMax=4
+    -o ControlMaster=auto
+    -o "ControlPath=${SSH_CONTROL_PATH}"
+    -o ControlPersist=300
+)
+
+# Cleanup SSH control socket on exit
+cleanup_ssh() {
+    if [ -n "${SERVER_IP:-}" ]; then
+        ssh "${_ssh_opts[@]}" -O exit "root@${SERVER_IP}" 2>/dev/null || true
+    fi
+    rm -rf "$SSH_CONTROL_DIR"
+}
+trap cleanup_ssh EXIT
+
 remote() {
-    ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "root@${SERVER_IP}" "$@"
+    ssh "${_ssh_opts[@]}" "root@${SERVER_IP}" "$@"
 }
 
 # =============================================================================
@@ -154,10 +182,25 @@ fi
 step "2/8" "检测 SSH 连接"
 
 info "测试 SSH 连接到 root@${SERVER_IP}..."
-if remote "echo 'SSH_OK'" 2>/dev/null | grep -q "SSH_OK"; then
-    ok "SSH 连接正常"
+# First call establishes the ControlMaster socket — may take longer.
+# Retry up to 3 times with increasing patience.
+SSH_CONNECTED=false
+for _attempt in 1 2 3; do
+    SSH_TEST_OUTPUT=$(remote "echo 'SSH_OK'" 2>&1) || true
+    if echo "$SSH_TEST_OUTPUT" | grep -q "SSH_OK"; then
+        SSH_CONNECTED=true
+        break
+    fi
+    warn "SSH 尝试 ${_attempt}/3 未成功，${_attempt}s 后重试..."
+    sleep "$_attempt"
+done
+
+if [ "$SSH_CONNECTED" = true ]; then
+    ok "SSH 连接正常 (ControlMaster 已建立)"
 else
     fail "无法 SSH 到 root@${SERVER_IP}"
+    # Show the actual error for debugging
+    warn "最后一次尝试输出: $SSH_TEST_OUTPUT"
     human \
         "请确保 SSH 免密登录已配置:" \
         "  ssh-copy-id root@${SERVER_IP}" \
@@ -241,7 +284,7 @@ fi
 ok "配置文件已生成"
 
 info "上传 .env 到服务器..."
-scp -o ConnectTimeout=15 "$ENV_FILE" "root@${SERVER_IP}:${PROJECT_DIR}/.env"
+scp "${_ssh_opts[@]}" "$ENV_FILE" "root@${SERVER_IP}:${PROJECT_DIR}/.env"
 rm -f "$ENV_FILE"
 ok "配置已上传到 ${SERVER_IP}:${PROJECT_DIR}/.env"
 
@@ -285,9 +328,19 @@ remote "docker stop \$(docker ps -q) 2>/dev/null; docker rm -f \$(docker ps -aq)
 sleep 5
 
 # Step 4: 验证端口可用（用 lsof 检测，比 ss 更可靠）
+# 先确认 SSH 连通（避免超时导致误判端口空闲）
+_ssh_check=$(remote "echo SSH_CHECK_OK" 2>&1) || true
+if ! echo "$_ssh_check" | grep -q "SSH_CHECK_OK"; then
+    bail "SSH 连接中断，无法验证端口状态。请检查网络后重试。"
+fi
+
 PORTS_BUSY=false
 for PORT in 80 8000; do
-    if remote "lsof -iTCP:${PORT} -sTCP:LISTEN -P -n 2>/dev/null" 2>/dev/null | grep -q "LISTEN"; then
+    LSOF_OUTPUT=$(remote "lsof -iTCP:${PORT} -sTCP:LISTEN -P -n 2>/dev/null || true" 2>/dev/null) || {
+        warn "SSH 执行 lsof 检查端口 ${PORT} 失败，跳过"
+        continue
+    }
+    if echo "$LSOF_OUTPUT" | grep -q "LISTEN"; then
         PORTS_BUSY=true
         warn "端口 ${PORT} 仍被占用"
     fi
