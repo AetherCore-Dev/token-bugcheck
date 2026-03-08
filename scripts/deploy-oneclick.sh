@@ -272,75 +272,105 @@ else
 fi
 
 info "停止旧服务..."
+# 用 docker compose down 停止 + 移除容器和网络
 remote "cd $PROJECT_DIR && docker compose $COMPOSE_FILES down --remove-orphans --timeout 30" 2>&1 || true
 
-# 强制清理残留容器
+# 兜底: 清理可能残留的项目容器（按目录名自动匹配前缀，而非硬编码名称）
 info "清理残留容器..."
-remote "docker ps -a --filter 'name=token-rugcheck' -q | xargs -r docker rm -f" 2>&1 || true
+COMPOSE_PROJECT=$(remote "basename $PROJECT_DIR" 2>/dev/null) || COMPOSE_PROJECT=""
+if [ -n "$COMPOSE_PROJECT" ]; then
+    remote "docker ps -a --filter 'name=${COMPOSE_PROJECT}' -q | xargs -r docker rm -f" 2>&1 || true
+fi
 
-# 清理残留的 docker-proxy 进程和 Docker 网络
-# docker compose down 后 docker-proxy 可能残留，导致 Docker daemon 认为端口仍被占用
-# 即使 ss -tlnp 看不到监听，Docker 内部状态也可能不一致
-info "清理 Docker 网络和端口残留..."
-remote "pkill -9 -f docker-proxy 2>/dev/null" 2>/dev/null || true
-remote "docker network prune -f 2>/dev/null" 2>/dev/null || true
-sleep 2
+# 等待端口释放（docker compose down 后通常 2-3 秒内释放）
+info "等待端口释放..."
+sleep 3
 
-# 检查端口是否已释放，未释放则重启 Docker daemon（一次性）
-NEED_DOCKER_RESTART=false
+PORTS_OK=true
 for PORT in 80 8000; do
-    OS_BUSY=$(remote "ss -tlnp 2>/dev/null | grep -E ':${PORT}\b'" 2>/dev/null) || OS_BUSY=""
-    DOCKER_BUSY=$(remote "pgrep -f 'docker-proxy.*:${PORT}' 2>/dev/null" 2>/dev/null) || DOCKER_BUSY=""
-    if [ -n "$OS_BUSY" ] || [ -n "$DOCKER_BUSY" ]; then
-        warn "端口 ${PORT} 仍被占用，标记需要重启 Docker daemon"
-        NEED_DOCKER_RESTART=true
+    if remote "ss -tlnp 2>/dev/null | grep -qE ':${PORT}\b'" 2>/dev/null; then
+        PORTS_OK=false
+        warn "端口 ${PORT} 仍被占用"
     fi
 done
 
-if [ "$NEED_DOCKER_RESTART" = true ]; then
-    warn "端口未能通过 kill 释放，重启 Docker daemon..."
-    # 使用 nohup 在服务器后台重启 Docker，避免 SSH 连接被中断
-    remote "nohup bash -c 'systemctl restart docker' >/dev/null 2>&1 &" 2>/dev/null || true
-    info "等待 Docker daemon 重启和 SSH 恢复..."
-    sleep 10
-
-    # 等待 SSH 恢复连通
-    SSH_WAIT=0
-    SSH_MAX=60
-    while [ "$SSH_WAIT" -lt "$SSH_MAX" ]; do
-        if remote "echo SSH_OK" 2>/dev/null | grep -q "SSH_OK"; then
-            break
-        fi
-        SSH_WAIT=$((SSH_WAIT + 3))
-        sleep 3
-        printf "  ⏳ 等待 SSH 恢复... %ds\r" "$SSH_WAIT"
-    done
-    printf "\n"
-
-    if [ "$SSH_WAIT" -ge "$SSH_MAX" ]; then
-        fail "Docker 重启后 SSH 连接未恢复 (${SSH_MAX}s)"
-        human "请手动 SSH 登录检查: ssh root@${SERVER_IP}"
-        exit 1
+if [ "$PORTS_OK" = false ]; then
+    # 端口未释放 — 可能是 docker-proxy 残留或 restart policy 导致容器复活
+    warn "端口未释放，强制停止所有项目容器并清理..."
+    # 停止所有匹配的容器（防止 restart policy 复活）
+    if [ -n "$COMPOSE_PROJECT" ]; then
+        remote "docker ps -a --filter 'name=${COMPOSE_PROJECT}' -q | xargs -r docker stop --time 5" 2>&1 || true
+        remote "docker ps -a --filter 'name=${COMPOSE_PROJECT}' -q | xargs -r docker rm -f" 2>&1 || true
     fi
-    ok "Docker daemon 已重启，SSH 已恢复 (${SSH_WAIT}s)"
+    # 杀 docker-proxy 残留
+    remote "pkill -9 -f docker-proxy 2>/dev/null" 2>/dev/null || true
+    # 清理项目网络
+    remote "docker network prune -f 2>/dev/null" 2>/dev/null || true
+    sleep 3
 
-    # 等待 Docker daemon 完全就绪
-    DOCKER_WAIT=0
-    while [ "$DOCKER_WAIT" -lt 30 ]; do
-        if remote "docker info >/dev/null 2>&1"; then
-            break
+    # 二次检查
+    STILL_BUSY=false
+    for PORT in 80 8000; do
+        if remote "ss -tlnp 2>/dev/null | grep -qE ':${PORT}\b'" 2>/dev/null; then
+            STILL_BUSY=true
+            warn "端口 ${PORT} 仍被占用（二次检查）"
         fi
-        DOCKER_WAIT=$((DOCKER_WAIT + 2))
-        sleep 2
     done
-    ok "Docker daemon 就绪"
+
+    if [ "$STILL_BUSY" = true ]; then
+        # 最终手段：后台重启 Docker daemon
+        warn "端口仍未释放，后台重启 Docker daemon..."
+        remote "nohup bash -c 'systemctl restart docker' >/dev/null 2>&1 &" 2>/dev/null || true
+        info "等待 Docker daemon 重启和 SSH 恢复..."
+        sleep 10
+
+        SSH_WAIT=0
+        SSH_MAX=60
+        while [ "$SSH_WAIT" -lt "$SSH_MAX" ]; do
+            if remote "echo SSH_OK" 2>/dev/null | grep -q "SSH_OK"; then
+                break
+            fi
+            SSH_WAIT=$((SSH_WAIT + 3))
+            sleep 3
+            printf "  ⏳ 等待 SSH 恢复... %ds\r" "$SSH_WAIT"
+        done
+        printf "\n"
+
+        if [ "$SSH_WAIT" -ge "$SSH_MAX" ]; then
+            fail "Docker 重启后 SSH 未恢复 (${SSH_MAX}s)"
+            human "请手动检查: ssh root@${SERVER_IP}"
+            exit 1
+        fi
+        ok "SSH 已恢复 (${SSH_WAIT}s)"
+
+        # 等待 Docker daemon 就绪
+        DOCKER_WAIT=0
+        while [ "$DOCKER_WAIT" -lt 30 ]; do
+            if remote "docker info >/dev/null 2>&1"; then break; fi
+            DOCKER_WAIT=$((DOCKER_WAIT + 2))
+            sleep 2
+        done
+        ok "Docker daemon 就绪"
+
+        # daemon 重启后 restart policy 可能再次复活容器，再清一次
+        if [ -n "$COMPOSE_PROJECT" ]; then
+            remote "docker ps -a --filter 'name=${COMPOSE_PROJECT}' -q | xargs -r docker rm -f" 2>&1 || true
+        fi
+        sleep 2
+    fi
 fi
 
-# 最终确认端口已释放
+# 最终确认
 for PORT in 80 8000; do
     if remote "ss -tlnp 2>/dev/null | grep -qE ':${PORT}\b'" 2>/dev/null; then
-        fail "端口 ${PORT} 仍被占用（即使重启 Docker 后）"
-        human "请手动排查: ssh root@${SERVER_IP} 'ss -tlnp | grep :${PORT}'"
+        fail "端口 ${PORT} 仍被占用"
+        human \
+            "请手动排查:" \
+            "  ssh root@${SERVER_IP}" \
+            "  ss -tlnp | grep :${PORT}" \
+            "  docker ps -a" \
+            "  # 停止所有容器: docker stop \$(docker ps -q)" \
+            "  # 再运行部署脚本"
         exit 1
     fi
 done
