@@ -5,13 +5,14 @@
 ## 目录
 - [1. 架构概览](#1-架构概览)
 - [2. 首次部署](#2-首次部署)
-- [3. 日常更新（代码 + ag402 依赖）](#3-日常更新代码--ag402-依赖)
-- [4. 数据备份](#4-数据备份)
-- [5. 日常运维](#5-日常运维)
-- [6. 故障排查](#6-故障排查)
-- [7. 配置参考](#7-配置参考)
-- [8. 安全修复记录](#8-安全修复记录)
-- [9. 已知问题](#9-已知问题)
+- [3. 分支策略与发布流程](#3-分支策略与发布流程)
+- [4. 日常更新（代码 + ag402 依赖）](#4-日常更新代码--ag402-依赖)
+- [5. 数据备份](#5-数据备份)
+- [6. 日常运维](#6-日常运维)
+- [7. 故障排查](#7-故障排查)
+- [8. 配置参考](#8-配置参考)
+- [9. 安全修复记录](#9-安全修复记录)
+- [10. 已知问题](#10-已知问题)
 - [脚本速查](#脚本速查)
 
 ---
@@ -138,20 +139,118 @@ bash scripts/verify.sh --server-ip <IP> --domain <domain>
 
 ---
 
-## 3. 日常更新（代码 + ag402 依赖）
+## 3. 分支策略与发布流程
+
+### 分支结构
+
+```
+main          ← 生产分支，只接受经过验证的 PR 合入，每次合入打 tag
+  └── develop ← 集成分支，功能分支的汇集地，对应 devnet 环境
+        └── feature/xxx ← 每个新功能独立分支，本地 test 模式开发
+        └── fix/xxx     ← Bug 修复分支
+```
+
+**原则：**
+- 禁止直接 `git push origin main`（在 GitHub Settings → Branches 中启用分支保护）
+- 生产服务器**只**部署打了 tag 的版本，**不**自动跟踪 `main` HEAD
+- `quick-update.sh` 的第三个参数指定 tag，不传则默认 `main` 最新（用于紧急修复）
+
+### 日常开发流程
+
+```
+1. 从 develop 创建功能分支
+   git checkout develop && git pull
+   git checkout -b feature/my-new-feature
+
+2. 本地开发，用 test 模式验证
+   SOLANA_NETWORK=test docker compose up
+
+3. 完成后 PR → develop（代码审查）
+
+4. develop 在 devnet 环境集成测试通过
+
+5. PR → main（代码审查 + CI 绿灯）
+
+6. 合入后立即打 tag
+   git tag -a v1.x.x -m "feat: 描述新功能"
+   git push origin v1.x.x
+
+7. 确认后人工部署到生产
+   bash scripts/quick-update.sh <IP> <domain> v1.x.x
+```
+
+### 环境与分支对应关系
+
+| 环境 | `SOLANA_NETWORK` | 对应分支 | 说明 |
+|------|-----------------|----------|------|
+| 本地 test | `mock` | `feature/*` | Mock 支付，无需链上，快速迭代 |
+| 本地/云 devnet | `devnet` | `develop` | 真实交易逻辑，使用测试 SOL |
+| 生产 mainnet | `mainnet` | `main` (tag) | 真实 USDC 支付 |
+
+### 版本 Tag 规范
+
+遵循语义化版本 `vMAJOR.MINOR.PATCH`：
+- `PATCH`：bug 修复、文档更新、运维改进
+- `MINOR`：向后兼容的新功能
+- `MAJOR`：破坏性变更（API 不兼容、架构重构）
+
+```bash
+# 打 tag 并推送
+git tag -a v1.2.0 -m "feat: add token comparison endpoint"
+git push origin v1.2.0
+
+# 查看所有 tag
+git tag -l --sort=-version:refname | head -10
+```
+
+### 设置 GitHub 分支保护（推荐立即配置）
+
+进入 GitHub → Settings → Branches → Add rule：
+- Branch name pattern: `main`
+- ✅ Require a pull request before merging
+- ✅ Require approvals: 1
+- ✅ Do not allow bypassing the above settings
+
+---
+
+## 4. 日常更新（代码 + ag402 依赖）
 
 ### 快速更新（推荐）
 
-代码修改后，一条命令完成更新：
+**推荐方式：部署指定 tag（稳定可控）**
 
 ```bash
-bash scripts/quick-update.sh <server-ip> [domain]
+# 部署指定 tag（推荐，生产必用）
+bash scripts/quick-update.sh <server-ip> <domain> v1.2.0
 
 # 示例
+bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev v1.2.0
+```
+
+**紧急修复：部署 main 最新（省略 tag 参数）**
+
+```bash
 bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev
 ```
 
-自动执行：拉取代码 → 备份数据 → 重新构建（含 ag402 依赖更新） → 重启 → 健康检查 → 验证。
+脚本自动执行：拉取指定 ref → 备份数据 → 重新构建（含 ag402 依赖更新） → 重启 → 健康检查 → 验证 → 输出回滚命令。
+
+### 回滚
+
+部署失败或服务异常时，使用更新结束时脚本打印的**回滚命令**：
+
+```
+  回滚命令:
+    bash scripts/quick-update.sh 140.82.49.221 "rugcheck.aethercore.dev" abc1234
+```
+
+或手动回滚到上一个稳定 tag：
+
+```bash
+bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev v1.1.0
+```
+
+部署历史记录在服务器 `/opt/token-rugcheck/.deploy_history`，可查阅历次部署的 ref 和 commit。
 
 ### 完整重新部署
 
@@ -183,14 +282,17 @@ docker compose exec ag402-gateway pip show ag402-core ag402-mcp
 
 | 场景 | 脚本行为 |
 |------|---------|
+| 指定 tag 部署 | `git fetch --tags` + `git checkout <tag>`，精确锁定版本 |
+| 指定分支部署 | `git checkout <branch>` + `git pull`，获取分支最新 |
 | 服务器有未提交文件导致 git pull 冲突 | 自动 `git stash --include-untracked` 后重试 |
 | 旧容器未完全停止 | `docker compose down --remove-orphans` + 强制清理残留容器 |
 | 端口被占用（80/8000） | 自动检测并 kill 占用进程后重试 |
 | Docker build 缓存导致 ag402 不更新 | 使用 `--no-cache` 强制重建 |
+| 部署完成 | 记录 ref/commit 到 `.deploy_history`，打印回滚命令 |
 
 ---
 
-## 4. 数据备份
+## 5. 数据备份
 
 ag402-data SQLite 存储支付重放保护数据，丢失会导致重复支付攻击。
 
@@ -210,7 +312,7 @@ BACKUP_REMOTE_HOST=backup-server bash scripts/backup-data.sh --remote scp
 
 ---
 
-## 5. 日常运维
+## 6. 日常运维
 
 ```bash
 # SSH 到服务器
@@ -251,7 +353,7 @@ docker system prune -f
 
 ---
 
-## 6. 故障排查
+## 7. 故障排查
 
 ### 诊断流程
 
@@ -299,10 +401,11 @@ ss -tlnp | grep -E ':80 |:8000 '
 # 如果仍被占用：
 # lsof -i :80 和 lsof -i :8000 找到 PID 并 kill
 
-# 3. 清理 git 状态
+# 3. 清理 git 状态，恢复到上一个稳定 tag
 git stash --include-untracked
 git clean -fd
-git pull origin main
+git fetch --tags origin
+git checkout v1.x.x  # 替换为实际的稳定 tag，参考 .deploy_history
 
 # 4. 重建并启动
 docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache
@@ -316,7 +419,7 @@ curl -s http://localhost:8000/health
 
 ---
 
-## 7. 配置参考
+## 8. 配置参考
 
 ### .env 关键变量
 
@@ -337,7 +440,7 @@ curl -s http://localhost:8000/health
 
 ---
 
-## 8. 安全修复记录
+## 9. 安全修复记录
 
 ### v0.1.1 安全加固 (2025-06)
 
@@ -399,7 +502,24 @@ curl -s http://localhost:8000/health
 
 ---
 
-## 9. 已知问题
+### v0.1.4 分支保护 + 部署安全加固 (2026-03)
+
+新增分支策略文档，加固部署脚本安全性：
+
+| # | 修改内容 | 文件 | 类型 | 说明 |
+|---|----------|------|------|------|
+| D1 | **新增分支策略与发布流程文档** | `OPERATIONS.md` | 📖 文档 | 新增第 3 节：main/develop/feature 分支规范、环境与分支对应关系、语义化 tag 规范、GitHub 分支保护配置步骤 |
+| D2 | **quick-update.sh 支持指定 tag/分支/commit 部署** | `quick-update.sh` | 🔧 功能 | 新增第三个参数 `[ref]`，支持精确锁定版本（`v1.2.0`）、分支（`develop`）或 commit hash；默认仍为 `main` |
+| D3 | **quick-update.sh 部署历史记录** | `quick-update.sh` | 🔧 功能 | 每次部署后写入服务器 `.deploy_history`（已加入 `.gitignore`），记录时间、ref、commit、前一个 commit |
+| D4 | **quick-update.sh 自动打印回滚命令** | `quick-update.sh` | 🔧 功能 | 部署成功后打印回滚命令；通过 `trap EXIT` 确保构建失败、健康检查超时等场景也能输出回滚命令 |
+| S13 | **GIT_REF 输入校验防止 shell 注入** | `quick-update.sh` | 🔴 安全 | `[ref]` 参数经白名单正则校验（`^[a-zA-Z0-9._/-]+$`），拒绝含特殊字符的输入，防止通过参数在远端服务器执行任意命令 |
+| D5 | **deploy-oneclick.sh 加入职责说明** | `deploy-oneclick.sh` | 📖 文档 | Phase 5 新增提示，明确此脚本用于首次部署/完整重配，日常更新应使用 `quick-update.sh <IP> <domain> <tag>` |
+| D6 | **setup-server.sh 加入职责注释** | `setup-server.sh` | 📖 文档 | 说明 `setup-server.sh` 始终拉取 main HEAD（初始化路径），与 tag 锁定的 `quick-update.sh` 职责边界明确 |
+| D7 | **.gitignore 新增 .deploy_history** | `.gitignore` | 🔒 安全 | 部署历史（含 commit hash 记录）加入忽略列表，防止运维日志意外提交到公开仓库 |
+
+---
+
+## 10. 已知问题
 
 ### ag402 库的问题（上游，需等待更新）
 
@@ -427,9 +547,28 @@ curl -s http://localhost:8000/health
 
 | 脚本 | 功能 | 用法 |
 |------|------|------|
-| `deploy-oneclick.sh` | 一键部署（首次 + 更新均可） | `bash scripts/deploy-oneclick.sh` |
-| `quick-update.sh` | 快速更新（代码 + ag402 依赖） | `bash scripts/quick-update.sh <IP> [domain]` |
+| `deploy-oneclick.sh` | 一键部署（**首次部署或完整重新配置**，始终拉取 main HEAD） | `bash scripts/deploy-oneclick.sh` |
+| `quick-update.sh` | 快速更新（支持 tag/分支/commit，含回滚） | `bash scripts/quick-update.sh <IP> [domain] [ref]` |
 | `backup-data.sh` | 数据备份 | `bash scripts/backup-data.sh` |
 | `setup-server.sh` | 服务器初始化 | 被 deploy-oneclick 调用 |
 | `generate-env.sh` | 生成 .env | 被 deploy-oneclick 调用 |
 | `verify.sh` | 5 层部署验证 | `bash scripts/verify.sh --server-ip <IP>` |
+
+### quick-update.sh 常用命令速查
+
+```bash
+# 部署指定 tag（生产推荐）
+bash scripts/quick-update.sh <IP> <domain> v1.2.0
+
+# 部署 main 最新（紧急修复用）
+bash scripts/quick-update.sh <IP> <domain>
+
+# 部署 develop 分支（预发测试）
+bash scripts/quick-update.sh <IP> "" develop
+
+# 回滚到指定版本
+bash scripts/quick-update.sh <IP> <domain> v1.1.0
+
+# 查看部署历史（在服务器上执行）
+cat /opt/token-rugcheck/.deploy_history
+```

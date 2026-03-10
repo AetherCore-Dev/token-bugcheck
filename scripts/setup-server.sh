@@ -111,7 +111,9 @@ fi
 
 # --- 5. Clone or update repo ---
 if [ -d "$INSTALL_DIR/.git" ]; then
-    log_info "REPO" "Repo exists at $INSTALL_DIR — pulling latest..."
+    log_info "REPO" "Repo exists at $INSTALL_DIR — pulling latest main (initial setup path)..."
+    # Note: setup-server.sh always syncs to main HEAD.
+    # For tag-pinned production deploys, use quick-update.sh <IP> <domain> <tag> instead.
     cd "$INSTALL_DIR"
     if git pull origin main &>/dev/null; then
         COMMIT=$(git rev-parse --short HEAD 2>/dev/null)

@@ -296,7 +296,8 @@ PRIVATE_KEY=""
 # =============================================================================
 step "5/8" "构建 Docker 镜像 & 启动服务"
 
-info "拉取最新代码..."
+info "拉取最新代码 (main HEAD)..."
+info "注意: 此脚本用于首次部署或完整重新配置。日常更新请用 quick-update.sh <IP> <domain> <tag>"
 GIT_PULL_OUTPUT=$(remote "cd $PROJECT_DIR && git pull origin main 2>&1") || true
 if echo "$GIT_PULL_OUTPUT" | grep -qE "Aborting|CONFLICT|error:|fatal:"; then
     warn "git pull 失败，尝试自动 stash 后重试..."

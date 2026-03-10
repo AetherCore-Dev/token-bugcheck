@@ -27,6 +27,9 @@ test-ledger/
 *.db
 *.sqlite
 
+# Deployment history (server-side ops log, not for version control)
+.deploy_history
+
 # OS files
 .DS_Store
 Thumbs.db

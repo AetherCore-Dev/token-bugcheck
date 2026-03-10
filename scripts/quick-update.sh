@@ -3,24 +3,33 @@
 # quick-update.sh — 快速更新已部署的 Token RugCheck MCP
 #
 # 用法:
-#   bash scripts/quick-update.sh <server-ip> [domain]
+#   bash scripts/quick-update.sh <server-ip> [domain] [ref]
 #
 # 示例:
-#   bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev
-#   bash scripts/quick-update.sh 140.82.49.221
+#   bash scripts/quick-update.sh 140.82.49.221                          # 部署 main 最新
+#   bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev  # 带域名验证
+#   bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev v1.2.0  # 部署指定 tag
+#   bash scripts/quick-update.sh 140.82.49.221 "" v1.2.0               # 指定 tag，无域名
+#
+# 参数:
+#   <server-ip>  服务器 IP（必需）
+#   [domain]     域名，用于 HTTPS 验证（可选，空字符串跳过）
+#   [ref]        Git ref：tag（如 v1.2.0）、分支名或 commit hash（可选，默认 main）
 #
 # 功能:
-#   1. 拉取最新代码
+#   1. 拉取指定 ref（tag/分支/commit）
 #   2. 备份 ag402-data (重放保护)
 #   3. 重新构建 Docker 镜像
 #   4. 重启服务 (零数据丢失)
 #   5. 等待健康检查
 #   6. 运行 5 层验证
+#   7. 记录部署版本，支持快速回滚
 #
 # 适用场景:
-#   - 代码更新后重新部署
+#   - 代码更新后重新部署（推荐指定 tag，如 v1.x.x）
 #   - 配置微调后重启
 #   - 新项目基于此模板改造后首次部署（.env 已手动配好）
+#   - 回滚到上一个稳定版本
 # =============================================================================
 
 set -euo pipefail
@@ -43,14 +52,42 @@ step()    { printf "\n${BOLD}${CYAN}━━━ Step %s: %s ━━━${NC}\n\n" "$
 # --- Args ---
 SERVER_IP="${1:-}"
 DOMAIN="${2:-}"
+GIT_REF="${3:-main}"   # tag、分支名或 commit hash，默认 main
 PROJECT_DIR="/opt/token-rugcheck"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
+DEPLOY_LOG="${PROJECT_DIR}/.deploy_history"
 
 if [[ -z "$SERVER_IP" ]]; then
-    echo "用法: bash scripts/quick-update.sh <server-ip> [domain]"
-    echo "示例: bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev"
+    echo "用法: bash scripts/quick-update.sh <server-ip> [domain] [ref]"
+    echo ""
+    echo "示例:"
+    echo "  bash scripts/quick-update.sh 140.82.49.221                               # 部署 main 最新"
+    echo "  bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev       # 带域名验证"
+    echo "  bash scripts/quick-update.sh 140.82.49.221 rugcheck.aethercore.dev v1.2.0  # 部署指定 tag"
+    echo "  bash scripts/quick-update.sh 140.82.49.221 \"\" v1.2.0                      # 指定 tag，无域名"
     exit 1
 fi
+
+# --- 输入校验：GIT_REF 只允许合法字符（字母、数字、./-/_），防止 shell 注入 ---
+if [[ ! "$GIT_REF" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+    echo "错误: ref 参数包含非法字符: $GIT_REF"
+    echo "只允许字母、数字、点(.)、斜杠(/)、连字符(-)、下划线(_)"
+    exit 1
+fi
+
+# --- PREV_COMMIT 初始化（trap 中引用，需提前声明） ---
+PREV_COMMIT="unknown"
+NEW_COMMIT="unknown"
+
+# --- 退出时如已知 PREV_COMMIT，自动打印回滚命令（覆盖 build/healthcheck 失败场景） ---
+_print_rollback_hint() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ] && [ "$PREV_COMMIT" != "unknown" ]; then
+        printf "\n  ${YELLOW}[HINT] 部署失败，若需回滚，请执行:${NC}\n"
+        printf "    bash scripts/quick-update.sh %s \"%s\" %s\n\n" "$SERVER_IP" "$DOMAIN" "$PREV_COMMIT"
+    fi
+}
+trap '_print_rollback_hint' EXIT
 
 remote() {
     ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new "root@${SERVER_IP}" "$@"
@@ -59,6 +96,7 @@ remote() {
 printf "\n${BOLD}${CYAN}╔══════════════════════════════════════════════════════════╗${NC}\n"
 printf "${BOLD}${CYAN}║           快速更新 — Token RugCheck MCP                  ║${NC}\n"
 printf "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════╝${NC}\n\n"
+printf "  目标 ref: ${BOLD}%s${NC} | 服务器: %s\n\n" "$GIT_REF" "$SERVER_IP"
 
 # --- Step 1: 验证 SSH 和当前状态 ---
 step "1/6" "检查当前部署状态"
@@ -80,27 +118,53 @@ ok ".env 配置文件存在"
 RUNNING=$(remote "docker ps --format '{{.Names}}' | grep token | wc -l" 2>/dev/null) || RUNNING=0
 info "当前运行中的容器: $RUNNING"
 
-# --- Step 2: 拉取最新代码 ---
-step "2/6" "拉取最新代码"
+# --- Step 2: 拉取指定 ref ---
+step "2/6" "拉取代码 (ref=${GIT_REF})"
 
-GIT_OUTPUT=$(remote "cd $PROJECT_DIR && git pull origin main 2>&1") || true
-if echo "$GIT_OUTPUT" | grep -qE "Aborting|CONFLICT|error:|fatal:"; then
-    warn "git pull 失败，尝试自动 stash 后重试..."
-    STASH_OUTPUT=$(remote "cd $PROJECT_DIR && git stash --include-untracked && git pull origin main 2>&1") || true
-    if echo "$STASH_OUTPUT" | grep -qE "Aborting|CONFLICT|error:|fatal:"; then
-        fail "git pull 重试仍失败！请手动解决："
-        fail "  ssh root@${SERVER_IP}"
-        fail "  cd $PROJECT_DIR && git status"
+# 记录当前 commit 用于回滚
+PREV_COMMIT=$(remote "cd $PROJECT_DIR && git rev-parse HEAD 2>/dev/null || echo unknown") || PREV_COMMIT="unknown"
+info "当前 commit: $PREV_COMMIT"
+
+# 获取所有远程数据（stderr 重定向到 /dev/null 避免进度噪音）
+remote "cd $PROJECT_DIR && git fetch --tags origin 2>/dev/null" || true
+
+# 判断 ref 类型并切换
+#   - 如果是 tag 或 commit hash → git checkout，确保精确锁定
+#   - 如果是分支名 → git checkout + pull，获取最新
+IS_BRANCH=$(remote "cd $PROJECT_DIR && git branch -r 2>/dev/null | grep -q 'origin/${GIT_REF}$' && echo YES || echo NO") || IS_BRANCH="NO"
+
+if [[ "$IS_BRANCH" == "YES" ]]; then
+    # 分支：切换并拉取最新
+    CHECKOUT_OUTPUT=$(remote "cd $PROJECT_DIR && git checkout ${GIT_REF} 2>&1 && git pull origin ${GIT_REF} 2>&1") || true
+    if echo "$CHECKOUT_OUTPUT" | grep -qE "error:|fatal:"; then
+        warn "分支切换失败，尝试 stash 后重试..."
+        remote "cd $PROJECT_DIR && git stash --include-untracked" 2>/dev/null || true
+        remote "cd $PROJECT_DIR && git checkout ${GIT_REF} && git pull origin ${GIT_REF}" 2>&1 || {
+            fail "代码更新失败！请手动检查: ssh root@${SERVER_IP} 'cd $PROJECT_DIR && git status'"
+            exit 1
+        }
+        ok "git stash + checkout + pull 成功"
+    else
+        echo "$CHECKOUT_OUTPUT" | tail -5
+        ok "分支已切换并更新: ${GIT_REF}"
+    fi
+else
+    # tag 或 commit hash：精确 checkout
+    CHECKOUT_OUTPUT=$(remote "cd $PROJECT_DIR && git checkout ${GIT_REF} 2>&1") || true
+    if echo "$CHECKOUT_OUTPUT" | grep -qE "error:|fatal:"; then
+        fail "无法切换到 ref '${GIT_REF}'，请确认 tag/commit 是否存在"
+        fail "可用的 tag: $(remote 'cd '$PROJECT_DIR' && git tag | tail -10' 2>/dev/null)"
         exit 1
     fi
-    echo "$STASH_OUTPUT" | tail -5
-    ok "git stash + pull 成功"
-elif echo "$GIT_OUTPUT" | grep -q "Already up to date"; then
-    info "代码已是最新版本"
-else
-    echo "$GIT_OUTPUT" | tail -5
-    ok "代码已更新"
+    echo "$CHECKOUT_OUTPUT" | tail -3
+    ok "已切换到: ${GIT_REF}"
 fi
+
+# 记录本次部署
+NEW_COMMIT=$(remote "cd $PROJECT_DIR && git rev-parse HEAD 2>/dev/null") || NEW_COMMIT="unknown"
+DEPLOY_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+remote "echo '${DEPLOY_TIME} | ref=${GIT_REF} | commit=${NEW_COMMIT} | prev=${PREV_COMMIT}' >> ${DEPLOY_LOG}" 2>/dev/null || true
+ok "代码已就绪: $(remote "cd $PROJECT_DIR && git log -1 --oneline" 2>/dev/null)"
 
 # --- Step 3: 备份数据 ---
 step "3/6" "备份 ag402-data"
@@ -254,9 +318,16 @@ else
 fi
 printf "\n"
 printf "  模式: %s | 价格: %s USDC | 服务器: %s\n" "$MODE" "$PRICE" "$SERVER_IP"
+printf "  已部署: ${BOLD}%s${NC} (%s)\n" "$GIT_REF" "$NEW_COMMIT"
 if [ -n "$DOMAIN" ]; then
     printf "  入口: https://%s\n" "$DOMAIN"
 fi
+if [ "$PREV_COMMIT" != "$NEW_COMMIT" ] && [ "$PREV_COMMIT" != "unknown" ]; then
+    printf "\n  ${YELLOW}回滚命令:${NC}\n"
+    printf "    bash scripts/quick-update.sh %s \"%s\" %s\n" "$SERVER_IP" "$DOMAIN" "$PREV_COMMIT"
+fi
 printf "${BOLD}${CYAN}════════════════════════════════════════════════════════════${NC}\n\n"
 
+# 成功退出前清除 trap（避免重复打印回滚提示）
+trap - EXIT
 exit "$FAIL"
