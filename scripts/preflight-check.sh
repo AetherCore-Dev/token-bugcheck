@@ -82,10 +82,10 @@ if [ ! -f "$MANIFEST" ]; then
     exit 2
 fi
 
-SERVER_IP=$(grep '^\s*ip:' "$MANIFEST" | head -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'")
-SSH_USER=$(grep '^\s*ssh_user:' "$MANIFEST" | head -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'")
-PROJECT_DIR=$(grep '^\s*project_dir:' "$MANIFEST" | head -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'")
-DOMAIN_NAME=$(grep '^\s*name:' "$MANIFEST" | tail -1 | sed 's/.*:\s*//' | tr -d '"' | tr -d "'")
+SERVER_IP=$(grep '^\s*ip:' "$MANIFEST" | head -1 | sed 's/.*:[[:space:]]*//' | tr -d '"' | tr -d "'")
+SSH_USER=$(grep '^\s*ssh_user:' "$MANIFEST" | head -1 | sed 's/.*:[[:space:]]*//' | tr -d '"' | tr -d "'")
+PROJECT_DIR=$(grep '^\s*project_dir:' "$MANIFEST" | head -1 | sed 's/.*:[[:space:]]*//' | tr -d '"' | tr -d "'")
+DOMAIN_NAME=$(grep '^\s*name:' "$MANIFEST" | tail -1 | sed 's/.*:[[:space:]]*//' | tr -d '"' | tr -d "'")
 
 # Fall back to root if ssh_user not set
 SSH_USER="${SSH_USER:-root}"
