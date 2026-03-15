@@ -24,8 +24,10 @@ Build a framework where AI reads a project manifest + Runbook library, then auto
 1. **AI does everything it physically can** — only "login to third-party web console" operations go to humans
 2. **No trial-and-error** — Runbooks encode known solutions; AI reads before acting
 3. **Progressive evolution** — every deployment adds to the knowledge base
-4. **Secrets never in plaintext** — separation of config and secrets at every layer
+4. **Secrets never in plaintext commands** — secrets flow through files (.env), never inline command arguments
 5. **Scripts do, Runbooks direct** — no duplication of logic between the two
+6. **Build before down** — never stop running services before the new build succeeds
+7. **AI generates, human fills** — humans fill manifests; AI generates Runbooks, reports, and experiences
 
 ## Architecture
 
@@ -119,6 +121,13 @@ service:
   price: "0.02"
   free_daily_quota: 20
   production_mode: true
+  health_endpoint: /health                    # used by verify step
+  test_endpoint: /v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263  # used by payment test
+  test_expect_status: 200                     # expected HTTP status after payment
+  test_expect_fields:                         # fields that must exist in response JSON
+    - action.risk_score
+    - action.is_safe
+    - metadata.data_sources
 
 # === Secrets Reference ===
 # Sensitive values are in .env.secrets (gitignored).
@@ -147,6 +156,7 @@ GOPLUS_APP_SECRET=
 4. **Execution reports**: redact all secrets — show only `first4...last4`
 5. **Lessons and Runbooks**: never contain actual secret values
 6. **Server .env**: AI writes secrets from .env.secrets into server .env via SSH, using `echo "$VAR" >> .env` (variable expansion on local side only)
+7. **No inline secrets in commands**: AI never passes secrets as command-line arguments or inline environment variables (e.g., `PRIVATE_KEY='xxx' python3 script.py`). Instead, write secrets to server `.env` or a temporary server-side file, then let scripts read from there. This prevents secrets from appearing in process listings, shell history, and tool output logs.
 
 ### manifest.schema.yaml (validation rules)
 
@@ -162,6 +172,9 @@ required_fields:
   - blockchain.network
   - blockchain.seller_address
   - service.price
+  - service.health_endpoint
+  - service.test_endpoint
+  - service.test_expect_status
 
 ip_format: "^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$"
 seller_address_format: "^[1-9A-HJ-NP-Za-km-z]{32,44}$"  # base58
@@ -193,6 +206,10 @@ Every Runbook step has exactly four elements:
 ```
 
 The fourth element ("Do NOT attempt") is critical. It prevents the trial-and-error pattern observed during the v0.1.7 deployment. Each entry traces back to a specific failed attempt.
+
+### Placeholder Resolution
+
+Runbook placeholders like `{server.ip}`, `{domain.name}`, `{project.git_ref}` are resolved by AI at runtime by reading `manifest.yaml`. No template engine is involved — AI reads the Runbook, looks up the manifest value, and constructs the actual command. This keeps Runbooks human-readable and avoids build tooling.
 
 ### Runbook Hierarchy: common → templates → project
 
@@ -246,6 +263,30 @@ ops/runbooks/
 ```
 
 When existing scripts lack functionality (e.g., quick-update.sh has no DNS diagnostics), we enhance the script — not bypass it in the Runbook.
+
+### Deploy Strategy: Build Before Down
+
+To minimize service downtime, the deploy sequence is:
+
+1. `docker compose build --no-cache` — build new images while old containers still serve traffic
+2. If build fails → abort, service never interrupted, no rollback needed
+3. `docker compose down && docker compose up -d` — swap containers (downtime: seconds, not minutes)
+
+This reduces the outage window from "build time + restart time" (60+ seconds) to "restart time only" (< 5 seconds). The existing `quick-update.sh` does down-then-build; enhancing it to build-first is part of the implementation.
+
+### Auto-Rollback vs. Degrade-Continue
+
+After deployment, verification determines one of three outcomes:
+
+| Condition | Action |
+|-----------|--------|
+| Container not running OR health endpoint returns non-200 | **Auto-rollback**: restore previous code + .env, restart |
+| Business endpoint returns 5xx | **Auto-rollback**: same as above |
+| HTTPS domain fails but HTTP:IP works | **Degrade-continue**: service is live, DNS/CDN is external issue — note in report |
+| Payment test fails but service responds 402 correctly | **Degrade-continue**: paywall works, payment infra issue — note in report |
+| Payment test skipped (no buyer key configured) | **Degrade-continue**: expected, note in report |
+
+The auto-rollback decision is based on **"can users reach the service?"** — not on auxiliary checks like HTTPS or payment testing.
 
 ### Rollback: .env Backup Addition
 
@@ -611,13 +652,12 @@ scripts/                         # All scripts in project root (single location)
 ### New Project Onboarding Flow
 
 1. Human follows `ops/guides/setup-guide.md` to prepare infrastructure
-2. Human fills in `ops/manifest.yaml` for the new project
-3. Human creates `ops/runbooks/project/<new-name>/` by copying from `templates/` and customizing:
-   - `deploy.md`: which deploy script to use, compose file names
-   - `verify.md`: project-specific health/API endpoints
-   - `payment-test.md`: which endpoint to test, expected response schema
-   - `troubleshoot.md`: project-specific failure modes
-4. AI reads manifest → detects fresh install → executes common/preflight → common/server-init → project/deploy → project/verify → project/payment-test
+2. Human fills in `ops/manifest.yaml` for the new project (including service endpoints and test config)
+3. Human tells AI: "Manifest is ready, please deploy"
+4. AI reads manifest → auto-generates `ops/runbooks/project/<name>/` from templates + manifest fields (human never edits Runbooks)
+5. AI detects fresh install → executes common/preflight → common/server-init → project/deploy → project/verify → project/payment-test
+
+**Runbook generation**: AI copies each template, replaces generic placeholders with project-specific values from manifest (e.g., `{test_endpoint}` becomes the actual endpoint), and adds any project-specific "Do NOT attempt" entries from existing lessons. The generated project Runbooks are committed to git for audit and future reference.
 
 ### What's Truly Shared vs. Project-Specific
 
@@ -649,6 +689,33 @@ Server cron runs `monitor-deps.py` daily. On new version detected, sends notific
 
 Human sees GitHub Issue → opens Claude Code → says "upgrade to ag402 0.1.20" → AI executes full upgrade flow.
 
+## AI Entry Point
+
+### The Bootstrap Problem
+
+Claude Code starts each session with no memory of previous deployments. The AI needs to know: where is the manifest? What Runbooks to follow? What's the workflow?
+
+### Solution: CLAUDE.md Ops Instructions
+
+The project's `CLAUDE.md` (or a file it references) includes ops instructions that are automatically loaded at session start:
+
+```markdown
+# Ops Instructions
+
+When asked to deploy, upgrade, maintain, or check this project:
+
+1. Read `ops/manifest.yaml` for project config
+2. Read `ops/.env.secrets` for sensitive values (NEVER log or echo these)
+3. Scan `ops/lessons/` for relevant experience entries
+4. SSH to server → auto-detect current state (fresh / needs upgrade / healthy)
+5. Follow the appropriate Runbook in `ops/runbooks/project/{project.name}/`
+   - If project Runbooks don't exist yet, generate them from `ops/runbooks/templates/`
+6. After execution: write report to `ops/reports/`, check experience graduation
+7. Summarize result to human
+```
+
+This ensures every AI session starts with the same entry point, regardless of which human or which conversation initiated it.
+
 ## Success Criteria
 
 ### Known Non-Goals (MVP)
@@ -656,6 +723,7 @@ Human sees GitHub Issue → opens Claude Code → says "upgrade to ag402 0.1.20"
 - **Concurrent operations**: no locking mechanism for simultaneous AI sessions or human+AI operating on the same server. Usage pattern is single-operator.
 - **Non-ag402 services**: framework is designed for ag402+FastAPI+Docker+VPS. Other stacks are out of scope.
 - **Fully automated upgrade trigger**: Phase 1 is human-triggered. Automated monitoring (Phase 2) is optional enhancement.
+- **Secrets encryption at rest**: MVP uses plaintext `.env.secrets` (local) and server `.env`. Acceptable for single-operator VPS. Future enhancement: use `ag402 wallet.key` encryption or HashiCorp Vault.
 
 ### Acceptance Criteria
 
