@@ -238,16 +238,26 @@ if should_run "L5"; then
         log_skip "L5" "No audit response to validate schema"
     fi
 
-    # L5.4: Stats endpoint (via SSH if remote — /stats only allows loopback)
-    HTTP=$(run_on_host "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8000/stats" 2>/dev/null) || HTTP="000"
+    # L5.4: Stats endpoint (must exec inside container — Docker networking means
+    # host→container traffic arrives from bridge IP, not 127.0.0.1, triggering 403)
+    STATS_CONTAINER=$(run_on_host "docker ps --filter 'name=audit-server' --format '{{.Names}}' | head -1" 2>/dev/null) || STATS_CONTAINER=""
+    if [ -n "$STATS_CONTAINER" ]; then
+        HTTP=$(run_on_host "docker exec $STATS_CONTAINER curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/stats" 2>/dev/null) || HTTP="000"
+    else
+        HTTP=$(run_on_host "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8000/stats" 2>/dev/null) || HTTP="000"
+    fi
     if [ "$HTTP" = "200" ]; then
         log_ok "L5" "/stats endpoint returned 200"
     else
         log_fail "L5" "/stats returned $HTTP (expected 200)"
     fi
 
-    # L5.5: Metrics endpoint (via SSH if remote — /metrics only allows loopback)
-    HTTP=$(run_on_host "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8000/metrics" 2>/dev/null) || HTTP="000"
+    # L5.5: Metrics endpoint (same Docker exec strategy as /stats)
+    if [ -n "$STATS_CONTAINER" ]; then
+        HTTP=$(run_on_host "docker exec $STATS_CONTAINER curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:8000/metrics" 2>/dev/null) || HTTP="000"
+    else
+        HTTP=$(run_on_host "curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8000/metrics" 2>/dev/null) || HTTP="000"
+    fi
     if [ "$HTTP" = "200" ]; then
         log_ok "L5" "/metrics endpoint returned 200"
     else
