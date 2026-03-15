@@ -733,5 +733,5 @@ This ensures every AI session starts with the same entry point, regardless of wh
 - [ ] Payment test: works first try using Runbook (no trial-and-error)
 - [ ] Experience: new problems get written to lessons/, existing lessons get applied
 - [ ] Secrets: no plaintext secrets in git, reports, or command outputs
-- [ ] New project: second ag402 service can onboard by filling manifest + customizing templates
+- [ ] New project: second ag402 service can onboard by filling manifest alone (AI auto-generates Runbooks)
 - [ ] DNS failure: AI diagnoses root cause and gives human specific Cloudflare instructions
