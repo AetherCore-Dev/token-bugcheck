@@ -594,9 +594,16 @@ curl -s http://localhost:8000/health
 |------|------|
 | 旋转 devnet 私钥 | 旧私钥曾在 Git 历史中，建议生成新密钥对 |
 | **卖家钱包创建 USDC ATA** | 首笔真实收款前必须完成，否则买家交易报 `InsufficientFundsForRent`（swap 一次 USDC 即可自动创建） |
-| **配置私有 Solana RPC** | 生产环境强烈推荐，避免公共节点限速导致支付验证超时；推荐 [Helius](https://helius.dev) 免费层 |
+| ~~配置私有 Solana RPC~~ | ✅ 已配置 Helius mainnet RPC |
 | 配置 crontab 定时备份 | `0 3 * * * cd /opt/token-rugcheck && bash scripts/backup-data.sh` |
 | 部署 UptimeRobot | 监控 `https://<domain>/health` |
+| **修复 Cloudflare DNS** | DNS 解析到错误 IP（非服务器 IP），导致 HTTPS 域名不可访问；需在 Cloudflare 面板修正 A 记录指向 `140.82.49.221` |
+
+### 部署记录
+
+| 日期 | 版本 | 操作 | 备注 |
+|------|------|------|------|
+| 2026-03-14 | v0.1.7 (`b4485ff`) | 从 `f68a5ce` 升级 | ag402 0.1.19, `RUGCHECK_PRODUCTION=true` + `UVLOOP_INSTALL=0` 已加入 .env, mainnet 支付测试通过 (BONK 审计 $0.02), HTTPS 域名待修复 (Cloudflare DNS 问题) |
 
 ---
 
