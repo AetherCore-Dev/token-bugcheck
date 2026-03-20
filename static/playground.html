@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token RugCheck — API Playground</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0a0e17;--card:#111827;--border:#1e293b;--accent:#3b82f6;--green:#10b981;--red:#ef4444;--yellow:#f59e0b;--orange:#f97316;--text:#e2e8f0;--muted:#64748b;--radius:12px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+
+/* Header */
+.header{text-align:center;padding:40px 20px 20px;border-bottom:1px solid var(--border)}
+.header h1{font-size:28px;font-weight:700;letter-spacing:-0.5px}
+.header h1 span{color:var(--accent)}
+.header p{color:var(--muted);margin-top:8px;font-size:14px}
+
+/* Search */
+.search-box{max-width:640px;margin:32px auto;padding:0 20px;display:flex;gap:10px}
+.search-box input{flex:1;padding:14px 18px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:15px;outline:none;transition:border .2s}
+.search-box input:focus{border-color:var(--accent)}
+.search-box input::placeholder{color:var(--muted)}
+.search-box button{padding:14px 28px;background:var(--accent);border:none;border-radius:var(--radius);color:#fff;font-weight:600;font-size:15px;cursor:pointer;transition:opacity .2s;white-space:nowrap}
+.search-box button:hover{opacity:.85}
+.search-box button:disabled{opacity:.5;cursor:not-allowed}
+
+/* Status */
+.status{text-align:center;padding:12px;color:var(--muted);font-size:14px}
+.status.error{color:var(--red)}
+
+/* Result */
+.result{max-width:800px;margin:0 auto 40px;padding:0 20px;display:none}
+
+/* Score gauge */
+.gauge{text-align:center;padding:32px 0}
+.gauge-circle{width:120px;height:120px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:36px;font-weight:800;border:6px solid}
+.gauge-label{margin-top:12px;font-size:18px;font-weight:600}
+.gauge-sublabel{color:var(--muted);font-size:13px;margin-top:4px}
+
+/* Token info bar */
+.token-info{display:flex;justify-content:center;gap:24px;flex-wrap:wrap;padding:8px 0 24px;font-size:14px}
+.token-info span{color:var(--muted)}
+.token-info strong{color:var(--text)}
+
+/* Cards */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;margin-bottom:16px}
+.card h3{font-size:16px;font-weight:600;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.card h3 .badge{font-size:11px;padding:2px 8px;border-radius:6px;font-weight:500}
+
+/* Flags */
+.flags{display:flex;flex-direction:column;gap:8px}
+.flag{padding:10px 14px;border-radius:8px;font-size:14px;display:flex;align-items:center;gap:8px}
+.flag.red{background:rgba(239,68,68,.1);border-left:3px solid var(--red);color:#fca5a5}
+.flag.green{background:rgba(16,185,129,.1);border-left:3px solid var(--green);color:#6ee7b7}
+
+/* Evidence grid */
+.evidence-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
+.ev-item{background:var(--bg);padding:12px;border-radius:8px}
+.ev-item .label{font-size:12px;color:var(--muted);margin-bottom:4px}
+.ev-item .value{font-size:15px;font-weight:600}
+
+/* Meta */
+.meta{display:flex;flex-wrap:wrap;gap:16px;font-size:13px;color:var(--muted)}
+.meta span{background:var(--bg);padding:4px 10px;border-radius:6px}
+
+/* Code sample */
+.code-section{max-width:800px;margin:0 auto 60px;padding:0 20px}
+.code-section h2{font-size:20px;margin-bottom:16px}
+.code-tabs{display:flex;gap:0;margin-bottom:0}
+.code-tab{padding:8px 16px;background:var(--card);border:1px solid var(--border);border-bottom:none;cursor:pointer;font-size:13px;color:var(--muted);border-radius:8px 8px 0 0}
+.code-tab.active{color:var(--text);background:#1a2332}
+.code-block{background:#1a2332;border:1px solid var(--border);border-radius:0 8px 8px 8px;padding:20px;overflow-x:auto;font-family:'SF Mono',Consolas,monospace;font-size:13px;line-height:1.6;color:#c9d1d9;white-space:pre}
+
+/* Footer */
+.footer{text-align:center;padding:40px 20px;color:var(--muted);font-size:13px;border-top:1px solid var(--border)}
+
+/* Example tokens */
+.examples{text-align:center;margin-top:12px;font-size:13px;color:var(--muted)}
+.examples a{cursor:pointer;margin:0 6px;color:var(--accent);font-size:12px;opacity:.8}
+.examples a:hover{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Token <span>RugCheck</span> Playground</h1>
+  <p>Paste a Solana token mint address to get an instant security audit</p>
+</div>
+
+<div class="search-box">
+  <input id="mint" type="text" placeholder="Enter Solana mint address…" spellcheck="false">
+  <button id="btn" onclick="doAudit()">Audit</button>
+</div>
+<div class="examples">
+  Try: <a onclick="tryExample('JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN')">JUP</a>
+  <a onclick="tryExample('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')">USDC</a>
+  <a onclick="tryExample('So11111111111111111111111111111111111111112')">SOL</a>
+</div>
+
+<div id="status" class="status"></div>
+<div id="result" class="result"></div>
+
+<div class="code-section">
+  <h2>Integrate via API</h2>
+  <div class="code-tabs">
+    <div class="code-tab active" onclick="showTab(0)">cURL</div>
+    <div class="code-tab" onclick="showTab(1)">Python</div>
+    <div class="code-tab" onclick="showTab(2)">JavaScript</div>
+  </div>
+  <div id="code0" class="code-block">curl -s https://rugcheck.aethercore.dev/v1/audit/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN</div>
+  <div id="code1" class="code-block" style="display:none">import httpx
+
+resp = httpx.get(
+    "https://rugcheck.aethercore.dev/v1/audit/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"
+)
+report = resp.json()
+print(f"Risk: {report['action']['risk_level']} ({report['action']['risk_score']}/100)")</div>
+  <div id="code2" class="code-block" style="display:none">const resp = await fetch(
+  "https://rugcheck.aethercore.dev/v1/audit/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"
+);
+const report = await resp.json();
+console.log(`Risk: ${report.action.risk_level} (${report.action.risk_score}/100)`);</div>
+</div>
+
+<div class="footer">
+  Token RugCheck — x402-native Solana token security audit API<br>
+  <a href="https://github.com/allenenli/token-rugcheck" target="_blank">GitHub</a> · Powered by GoPlus, RugCheck, DexScreener
+</div>
+
+<script>
+const API = window.location.origin;
+
+function tryExample(addr) {
+  document.getElementById('mint').value = addr;
+  doAudit();
+}
+
+function showTab(i) {
+  document.querySelectorAll('.code-tab').forEach((t,j) => {
+    t.classList.toggle('active', j===i);
+  });
+  for (let j=0; j<3; j++) document.getElementById('code'+j).style.display = j===i?'block':'none';
+}
+
+function riskColor(level) {
+  const m = {SAFE:'var(--green)',LOW:'var(--green)',MEDIUM:'var(--yellow)',HIGH:'var(--orange)',CRITICAL:'var(--red)'};
+  return m[level] || 'var(--muted)';
+}
+
+function fmt(v, suffix) {
+  if (v == null) return '—';
+  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+  if (typeof v === 'number') {
+    if (suffix === '%') return v.toFixed(1) + '%';
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v/1e3).toFixed(1) + 'K';
+    if (suffix === '$') return '$' + v.toFixed(4);
+    return v.toLocaleString();
+  }
+  return String(v);
+}
+
+async function doAudit() {
+  const mint = document.getElementById('mint').value.trim();
+  if (!mint) return;
+  const btn = document.getElementById('btn');
+  const status = document.getElementById('status');
+  const result = document.getElementById('result');
+
+  btn.disabled = true;
+  btn.textContent = 'Auditing…';
+  status.className = 'status';
+  status.textContent = 'Fetching data from 3 sources…';
+  result.style.display = 'none';
+
+  try {
+    const resp = await fetch(API + '/v1/audit/' + mint);
+    if (!resp.ok) {
+      const txt = await resp.text();
+      throw new Error(resp.status + ': ' + txt.substring(0, 200));
+    }
+    const r = await resp.json();
+    status.textContent = '';
+    renderReport(r);
+  } catch (e) {
+    status.className = 'status error';
+    status.textContent = 'Error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Audit';
+  }
+}
+
+function renderReport(r) {
+  const a = r.action, an = r.analysis, ev = r.evidence, m = r.metadata;
+  const color = riskColor(a.risk_level);
+  const result = document.getElementById('result');
+
+  let flagsHtml = '';
+  (an.red_flags||[]).forEach(f => {
+    flagsHtml += `<div class="flag red">${f.level}: ${f.message}</div>`;
+  });
+  (an.green_flags||[]).forEach(f => {
+    flagsHtml += `<div class="flag green">${f.level}: ${f.message}</div>`;
+  });
+
+  const evItems = [
+    ['Price', fmt(ev.price_usd, '$')],
+    ['Liquidity', fmt(ev.liquidity_usd)],
+    ['24h Volume', fmt(ev.volume_24h_usd)],
+    ['Holders', fmt(ev.holder_count)],
+    ['Top 10 Holders', fmt(ev.top_10_holders_pct, '%')],
+    ['LP Burned', fmt(ev.lp_burned_pct, '%')],
+    ['LP Locked', fmt(ev.lp_locked_pct, '%')],
+    ['Mintable', fmt(ev.is_mintable)],
+    ['Freezable', fmt(ev.is_freezable)],
+    ['Closable', fmt(ev.is_closable)],
+    ['RugCheck Score', ev.rugcheck_score != null ? ev.rugcheck_score.toFixed(0) : '—'],
+    ['Pair Created', ev.pair_created_at || '—'],
+  ];
+
+  result.innerHTML = `
+    <div class="gauge">
+      <div class="gauge-circle" style="border-color:${color};color:${color}">${a.risk_score}</div>
+      <div class="gauge-label" style="color:${color}">${a.risk_level}</div>
+      <div class="gauge-sublabel">${a.is_safe ? 'Appears Safe' : 'Caution Advised'}</div>
+    </div>
+    <div class="token-info">
+      <span>${ev.token_name||'—'} <strong>(${ev.token_symbol||'—'})</strong></span>
+      <span>${r.contract_address.slice(0,8)}…${r.contract_address.slice(-6)}</span>
+      ${r.degraded ? '<span style="color:var(--yellow)">⚠ Degraded</span>' : ''}
+    </div>
+    <div class="card">
+      <h3>Analysis <span class="badge" style="background:${color}22;color:${color}">${a.risk_level}</span></h3>
+      <p style="color:var(--muted);font-size:14px;line-height:1.6;margin-bottom:14px">${an.summary}</p>
+      <div class="flags">${flagsHtml}</div>
+    </div>
+    <div class="card">
+      <h3>Evidence</h3>
+      <div class="evidence-grid">
+        ${evItems.map(([l,v]) => `<div class="ev-item"><div class="label">${l}</div><div class="value">${v}</div></div>`).join('')}
+      </div>
+    </div>
+    <div class="card">
+      <h3>Metadata</h3>
+      <div class="meta">
+        <span>Sources: ${(m.data_sources||[]).join(', ')||'—'}</span>
+        <span>Completeness: ${m.data_completeness}</span>
+        <span>Response: ${m.response_time_ms}ms</span>
+        ${m.cache_hit ? '<span>Cached</span>' : ''}
+      </div>
+    </div>
+  `;
+  result.style.display = 'block';
+}
+
+document.getElementById('mint').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doAudit();
+});
+</script>
+</body>
+</html>
