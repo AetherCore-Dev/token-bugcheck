@@ -484,7 +484,7 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
         try:
             tokens = await fetch_trending_solana(
-                agg.client,
+                agg._client,
                 timeout=cfg.trending_timeout,
             )
         except Exception as exc:
