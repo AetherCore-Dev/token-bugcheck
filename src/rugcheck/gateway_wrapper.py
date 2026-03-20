@@ -220,6 +220,31 @@ class QuotaAwareGateway:
                     content={"detail": "Audit server unreachable"},
                 )
 
+        # --- Free-pass: trending (no quota consumed) ---
+
+        @app.get("/v1/trending")
+        async def trending_proxy(request: Request):
+            """Trending tokens — always proxied to audit backend, no quota consumed."""
+            client = proxy_client_holder["client"]
+            if client is None:
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Proxy not initialized"},
+                )
+            try:
+                resp = await client.get("/v1/trending")
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers={"content-type": resp.headers.get("content-type", "application/json")},
+                )
+            except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+                logger.warning("[GATEWAY-WRAPPER] Trending proxy failed: %s", exc)
+                return JSONResponse(
+                    status_code=502,
+                    content={"detail": "Trending data unavailable"},
+                )
+
         # --- Audit endpoints: quota-gated ---
 
         @app.api_route("/v1/audit/{mint_address}", methods=["GET"])

@@ -65,6 +65,10 @@ class Config:
     circuit_breaker_threshold: int = 5
     circuit_breaker_cooldown: int = 30
 
+    # Trending
+    trending_cache_ttl_seconds: int = 300
+    trending_timeout: float = 3.0
+
 
 def load_config() -> Config:
     """Build Config from environment variables with sensible defaults.
@@ -104,6 +108,10 @@ def load_config() -> Config:
         circuit_breaker_cooldown=_clamp(
             int(os.getenv("CIRCUIT_BREAKER_COOLDOWN", "30")), 1, 3600,
         ),
+        trending_cache_ttl_seconds=_clamp(
+            int(os.getenv("TRENDING_CACHE_TTL_SECONDS", "300")), 60, 3600,
+        ),
+        trending_timeout=float(os.getenv("TRENDING_TIMEOUT_SECONDS", "3.0")),
     )
 
     if cfg.ag402_address == _PLACEHOLDER_ADDRESS:

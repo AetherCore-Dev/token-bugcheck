@@ -21,6 +21,7 @@ from rugcheck.cache import TTLCache
 from rugcheck.config import Config, load_config
 from rugcheck.engine.risk_engine import build_report
 from rugcheck.fetchers.aggregator import Aggregator
+from rugcheck.fetchers.trending import TrendingCache, TrendingResponse, fetch_trending_solana
 from rugcheck.models import AggregatedData, AuditReport, RiskLevel
 
 # Import shared quota/IP utilities from the canonical module.
@@ -137,7 +138,7 @@ CACHE_MISS_TOTAL = Counter(
 
 # Known static paths for metrics — everything else is bucketed as "other"
 # to prevent cardinality explosion from arbitrary 404 paths.
-_KNOWN_METRIC_PATHS: frozenset[str] = frozenset({"/health", "/playground", "/stats", "/metrics", "/docs", "/redoc", "/openapi.json"})
+_KNOWN_METRIC_PATHS: frozenset[str] = frozenset({"/health", "/playground", "/stats", "/metrics", "/docs", "/redoc", "/openapi.json", "/v1/trending"})
 
 
 def _normalize_path(path: str) -> str:
@@ -149,6 +150,8 @@ def _normalize_path(path: str) -> str:
     """
     if "/audit/" in path:
         return "/v1/audit/{mint_address}"
+    if "/trending" in path:
+        return "/v1/trending"
     if path in _KNOWN_METRIC_PATHS:
         return path
     # Root path
@@ -226,7 +229,11 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     # Rate limiters — differentiated for free vs paid (gateway) users
     paid_limiter = RateLimiter(max_requests=cfg.paid_rate_limit, window_seconds=60)
     stats_limiter = RateLimiter(max_requests=10, window_seconds=60)
+    trending_limiter = RateLimiter(max_requests=30, window_seconds=60)
     free_daily = DailyQuota(max_daily=cfg.free_daily_quota)
+
+    # Trending cache — independent from audit TTLCache
+    trending_cache = TrendingCache(ttl_seconds=cfg.trending_cache_ttl_seconds)
 
     async def _daily_quota_cleanup_loop() -> None:
         """Periodically evict stale DailyQuota entries (every hour)."""
@@ -332,6 +339,14 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
                     )
         elif path.startswith("/stats") and not is_loopback:
             allowed, retry_after = await stats_limiter.check(client_ip)
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests. Please slow down."},
+                    headers={"Retry-After": str(retry_after)},
+                )
+        elif path.startswith("/v1/trending") or path == "/trending":
+            allowed, retry_after = await trending_limiter.check(client_ip)
             if not allowed:
                 return JSONResponse(
                     status_code=429,
@@ -450,6 +465,38 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
         await cache.set(mint_address, report)
         return report
+
+    @v1.get("/trending", response_model=TrendingResponse)
+    async def trending() -> TrendingResponse:
+        """Return top boosted Solana tokens from DexScreener."""
+        cached_data, age = await trending_cache.get()
+        if cached_data is not None:
+            return TrendingResponse(
+                tokens=cached_data.tokens,
+                cached=True,
+                cache_age_seconds=age,
+                source=cached_data.source,
+            )
+
+        agg = state["aggregator"]
+        if agg is None:
+            raise HTTPException(status_code=503, detail="Service not initialized")
+
+        try:
+            tokens = await fetch_trending_solana(
+                agg.client,
+                timeout=cfg.trending_timeout,
+            )
+        except Exception as exc:
+            logger.warning("[TRENDING] Failed to fetch trending tokens: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail="Trending data unavailable",
+            ) from exc
+
+        resp = TrendingResponse(tokens=tokens, cached=False, cache_age_seconds=0)
+        await trending_cache.set(resp)
+        return resp
 
     app.include_router(v1)
 
