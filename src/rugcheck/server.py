@@ -468,7 +468,10 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     @app.get("/playground", response_class=HTMLResponse)
     async def playground():
         """API Playground — interactive testing page."""
-        html_path = Path(__file__).resolve().parent.parent.parent / "static" / "playground.html"
+        # In Docker: /app/static/playground.html; locally: ../../static/ relative to this file
+        html_path = Path("/app/static/playground.html")
+        if not html_path.is_file():
+            html_path = Path(__file__).resolve().parent.parent.parent / "static" / "playground.html"
         if not html_path.is_file():
             raise HTTPException(status_code=404, detail="Playground page not found")
         return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
