@@ -172,7 +172,7 @@ class QuotaAwareGateway:
             lifespan=lifespan,
         )
 
-        # --- Health: always proxy to audit-server ---
+        # --- Free-pass routes: always proxy to audit-server, no quota consumed ---
 
         @app.get("/health")
         async def health(request: Request):
@@ -195,6 +195,29 @@ class QuotaAwareGateway:
                 return JSONResponse(
                     status_code=503,
                     content={"status": "unavailable", "detail": "Audit server unreachable"},
+                )
+
+        @app.get("/playground")
+        async def playground(request: Request):
+            """Playground — always proxied to audit backend, no quota consumed."""
+            client = proxy_client_holder["client"]
+            if client is None:
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Proxy not initialized"},
+                )
+            try:
+                resp = await client.get("/playground")
+                return Response(
+                    content=resp.content,
+                    status_code=resp.status_code,
+                    headers={"content-type": resp.headers.get("content-type", "text/html")},
+                )
+            except (httpx.HTTPError, asyncio.TimeoutError) as exc:
+                logger.warning("[GATEWAY-WRAPPER] Playground proxy failed: %s", exc)
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Audit server unreachable"},
                 )
 
         # --- Audit endpoints: quota-gated ---

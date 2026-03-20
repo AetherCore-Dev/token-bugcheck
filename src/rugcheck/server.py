@@ -7,12 +7,13 @@ import logging
 import re
 import time
 import uuid
+from pathlib import Path
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import APIRouter, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 from rugcheck import __version__
@@ -136,7 +137,7 @@ CACHE_MISS_TOTAL = Counter(
 
 # Known static paths for metrics — everything else is bucketed as "other"
 # to prevent cardinality explosion from arbitrary 404 paths.
-_KNOWN_METRIC_PATHS: frozenset[str] = frozenset({"/health", "/stats", "/metrics", "/docs", "/redoc", "/openapi.json"})
+_KNOWN_METRIC_PATHS: frozenset[str] = frozenset({"/health", "/playground", "/stats", "/metrics", "/docs", "/redoc", "/openapi.json"})
 
 
 def _normalize_path(path: str) -> str:
@@ -463,6 +464,14 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         return await audit(mint_address)
 
     # ---- Operational endpoints (no versioning needed) ----
+
+    @app.get("/playground", response_class=HTMLResponse)
+    async def playground():
+        """API Playground — interactive testing page."""
+        html_path = Path(__file__).resolve().parent.parent.parent / "static" / "playground.html"
+        if not html_path.is_file():
+            raise HTTPException(status_code=404, detail="Playground page not found")
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
     @app.get("/health")
     async def health():
