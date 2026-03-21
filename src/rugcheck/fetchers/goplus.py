@@ -80,7 +80,7 @@ def _parse_goplus(raw: dict) -> dict:
     # and the highest burn_percent across ALL pools for LP burned status
     dex_list = raw.get("dex") or []
     if dex_list:
-        best_pool = max(dex_list, key=lambda d: float(d.get("tvl") or 0))
+        best_pool = max(dex_list, key=lambda d: _safe_float(d.get("tvl")) or 0.0)
         data["liquidity_usd"] = _safe_float(best_pool.get("tvl"))
         # burn_percent can vary per pool; take the maximum across all pools
         burn_pcts = [_safe_float(d.get("burn_percent")) for d in dex_list]

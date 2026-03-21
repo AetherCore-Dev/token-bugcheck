@@ -22,6 +22,14 @@ def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(value, hi))
 
 
+def _clamp_float(value: float, lo: float, hi: float) -> float:
+    """Clamp *value* into [lo, hi], rejecting inf/NaN."""
+    import math
+    if math.isnan(value) or math.isinf(value):
+        return lo  # safe fallback
+    return max(lo, min(value, hi))
+
+
 @dataclass(frozen=True)
 class Config:
     """Immutable service configuration."""
@@ -88,16 +96,16 @@ def load_config() -> Config:
         production=os.getenv("RUGCHECK_PRODUCTION", "").lower() in ("1", "true", "yes"),
         cache_ttl_seconds=_clamp(int(os.getenv("CACHE_TTL_SECONDS", "3")), 0, 3600),
         cache_max_size=_clamp(int(os.getenv("CACHE_MAX_SIZE", "5000")), 1, 100_000),
-        goplus_timeout=float(os.getenv("GOPLUS_TIMEOUT_SECONDS", "2.5")),
-        rugcheck_timeout=float(os.getenv("RUGCHECK_API_TIMEOUT_SECONDS", "3.5")),
-        dexscreener_timeout=float(os.getenv("DEXSCREENER_TIMEOUT_SECONDS", "1.5")),
+        goplus_timeout=_clamp_float(float(os.getenv("GOPLUS_TIMEOUT_SECONDS", "2.5")), 0.1, 30.0),
+        rugcheck_timeout=_clamp_float(float(os.getenv("RUGCHECK_API_TIMEOUT_SECONDS", "3.5")), 0.1, 30.0),
+        dexscreener_timeout=_clamp_float(float(os.getenv("DEXSCREENER_TIMEOUT_SECONDS", "1.5")), 0.1, 30.0),
         goplus_app_key=os.getenv("GOPLUS_APP_KEY", ""),
         goplus_app_secret=os.getenv("GOPLUS_APP_SECRET", ""),
         ag402_price=os.getenv("AG402_PRICE", "0.05"),
         ag402_address=os.getenv("AG402_ADDRESS", _PLACEHOLDER_ADDRESS),
         ag402_chain=os.getenv("AG402_CHAIN", "solana"),
         ag402_token=os.getenv("AG402_TOKEN", "USDC"),
-        ag402_network=os.getenv("X402_NETWORK", "devnet"),
+        ag402_network=os.getenv("AG402_NETWORK", os.getenv("X402_NETWORK", "devnet")),
         ag402_gateway_port=int(os.getenv("AG402_GATEWAY_PORT", "8001")),
         ag402_prepaid_signing_key=os.getenv("AG402_PREPAID_SIGNING_KEY", ""),
         free_daily_quota=_clamp(int(os.getenv("FREE_DAILY_QUOTA", "20")), 0, 10_000),
@@ -111,7 +119,7 @@ def load_config() -> Config:
         trending_cache_ttl_seconds=_clamp(
             int(os.getenv("TRENDING_CACHE_TTL_SECONDS", "300")), 60, 3600,
         ),
-        trending_timeout=float(os.getenv("TRENDING_TIMEOUT_SECONDS", "3.0")),
+        trending_timeout=_clamp_float(float(os.getenv("TRENDING_TIMEOUT_SECONDS", "3.0")), 0.1, 30.0),
     )
 
     if cfg.ag402_address == _PLACEHOLDER_ADDRESS:

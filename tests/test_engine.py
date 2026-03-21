@@ -276,3 +276,41 @@ def test_build_report_includes_lp_locked():
     report = build_report("LPMINT", data)
     assert report.evidence.lp_burned_pct == 10.0
     assert report.evidence.lp_locked_pct == 75.0
+
+
+# --- KNOWN_SAFE_MINTS whitelist tests ---
+
+
+def test_known_safe_wrapped_sol():
+    """Wrapped SOL is whitelisted — should return SAFE with score 0."""
+    data = _make_data(is_mintable=True, is_freezable=True)  # would be CRITICAL normally
+    report = build_report("So11111111111111111111111111111111111111112", data)
+    assert report.action.is_safe is True
+    assert report.action.risk_score == 0
+    assert report.action.risk_level == RiskLevel.SAFE
+    assert any("whitelisted" in f.message.lower() for f in report.analysis.green_flags)
+    assert len(report.analysis.red_flags) == 0
+
+
+def test_known_safe_usdc():
+    """USDC is whitelisted — should bypass all risk rules."""
+    data = _make_data(is_mintable=True)
+    report = build_report("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", data)
+    assert report.action.is_safe is True
+    assert report.action.risk_score == 0
+
+
+def test_known_safe_usdt():
+    """USDT is whitelisted."""
+    data = _make_data()
+    report = build_report("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", data)
+    assert report.action.is_safe is True
+    assert report.action.risk_score == 0
+
+
+def test_non_whitelisted_mint_evaluated_normally():
+    """A mint NOT in KNOWN_SAFE_MINTS should go through normal evaluation."""
+    data = _make_data(is_mintable=True)
+    report = build_report("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", data)
+    assert report.action.risk_score >= 40  # mintable triggers CRITICAL
+    assert not any("whitelisted" in f.message.lower() for f in report.analysis.green_flags)

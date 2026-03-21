@@ -706,3 +706,203 @@ def test_placeholder_address_exported_from_config():
     """PLACEHOLDER_ADDRESS must be importable from rugcheck.config (single source of truth)."""
     from rugcheck.config import PLACEHOLDER_ADDRESS
     assert PLACEHOLDER_ADDRESS == "<YOUR_SOLANA_WALLET_ADDRESS>"
+
+
+# ---------------------------------------------------------------------------
+# 19. Security headers middleware
+# ---------------------------------------------------------------------------
+
+
+async def test_security_headers_present():
+    """Every response must include security headers."""
+    from rugcheck.server import create_app
+
+    app = create_app(Config(), aggregator=FakeAggregator(_safe_data()))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/health")
+
+    assert resp.headers.get("x-content-type-options") == "nosniff"
+    assert resp.headers.get("x-frame-options") == "DENY"
+    assert resp.headers.get("referrer-policy") == "strict-origin-when-cross-origin"
+    assert "camera=()" in resp.headers.get("permissions-policy", "")
+
+
+async def test_security_headers_hsts_in_production():
+    """Production mode must add HSTS and CSP."""
+    from rugcheck.server import create_app
+
+    cfg = Config(production=True)
+    app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/health")
+
+    assert "max-age=" in resp.headers.get("strict-transport-security", "")
+    assert "default-src" in resp.headers.get("content-security-policy", "")
+
+
+async def test_security_headers_no_hsts_in_dev():
+    """Non-production mode must NOT add HSTS."""
+    from rugcheck.server import create_app
+
+    cfg = Config(production=False)
+    app = create_app(cfg, aggregator=FakeAggregator(_safe_data()))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/health")
+
+    assert "strict-transport-security" not in resp.headers
+
+
+# ---------------------------------------------------------------------------
+# 20. IPv6-mapped loopback detection
+# ---------------------------------------------------------------------------
+
+
+async def test_ipv6_loopback_allowed_for_metrics():
+    """::1 (IPv6 loopback) should be treated as loopback for /metrics."""
+    from rugcheck.server import create_app
+
+    app = create_app(Config(), aggregator=FakeAggregator(_safe_data()))
+    transport = httpx.ASGITransport(app=app, client=("::1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/metrics")
+    assert resp.status_code == 200
+
+
+async def test_ipv6_mapped_ipv4_loopback_allowed():
+    """::ffff:127.0.0.1 (IPv6-mapped IPv4 loopback) should be treated as loopback."""
+    from rugcheck.server import create_app
+
+    app = create_app(Config(), aggregator=FakeAggregator(_safe_data()))
+    transport = httpx.ASGITransport(app=app, client=("::ffff:127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/metrics")
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 21. Circuit breaker half_open — thundering herd prevention
+# ---------------------------------------------------------------------------
+
+
+async def test_circuit_breaker_half_open_blocks_concurrent_probes():
+    """After cooldown, only ONE probe request should get through.
+    All other concurrent callers should see breaker as open."""
+    from rugcheck.server import create_app
+
+    call_count = 0
+
+    class SlowAggregator:
+        last_success_time = None
+        last_failure_time = None
+
+        async def aggregate(self, mint_address: str) -> AggregatedData:
+            nonlocal call_count
+            call_count += 1
+            # Simulate slow upstream — gives time for concurrent requests
+            await asyncio.sleep(0.05)
+            return _empty_data()
+
+        async def close(self) -> None:
+            pass
+
+    MINTS = [
+        "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+        "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+        "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+        "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+        "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+        "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+    ]
+
+    cfg = Config(circuit_breaker_threshold=3, circuit_breaker_cooldown=0.1)
+    app = create_app(cfg, aggregator=SlowAggregator())
+    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 12345))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Trip the breaker with 3 failures
+        for i in range(3):
+            await client.get(f"/v1/audit/{MINTS[i]}")
+        assert call_count == 3
+
+        # Wait for cooldown to expire
+        await asyncio.sleep(0.15)
+
+        # Send 3 concurrent requests — only ONE should reach the aggregator
+        call_count = 0
+        tasks = [
+            asyncio.create_task(client.get(f"/v1/audit/{MINTS[3+i]}"))
+            for i in range(3)
+        ]
+        responses = await asyncio.gather(*tasks)
+
+        # Exactly 1 probe should have gone through (the rest blocked by half_open)
+        assert call_count == 1, (
+            f"Expected exactly 1 probe request, got {call_count} — thundering herd not prevented"
+        )
+        # All responses should be degraded
+        for resp in responses:
+            assert resp.status_code == 200
+            assert resp.json()["degraded"] is True
+
+
+# ---------------------------------------------------------------------------
+# 22. Config timeout float clamping
+# ---------------------------------------------------------------------------
+
+
+def test_config_clamps_timeout_to_safe_range():
+    """Timeout floats should be clamped to [0.1, 30.0]."""
+    from rugcheck.config import load_config
+    import os
+
+    saved = {}
+    keys = ["GOPLUS_TIMEOUT_SECONDS", "RUGCHECK_API_TIMEOUT_SECONDS",
+            "DEXSCREENER_TIMEOUT_SECONDS", "TRENDING_TIMEOUT_SECONDS"]
+    for k in keys:
+        saved[k] = os.environ.get(k)
+
+    try:
+        # Set absurdly high values
+        os.environ["GOPLUS_TIMEOUT_SECONDS"] = "99999"
+        os.environ["RUGCHECK_API_TIMEOUT_SECONDS"] = "inf"
+        os.environ["DEXSCREENER_TIMEOUT_SECONDS"] = "-5"
+        os.environ["TRENDING_TIMEOUT_SECONDS"] = "0"
+
+        cfg = load_config()
+        assert cfg.goplus_timeout <= 30.0
+        assert cfg.rugcheck_timeout <= 30.0
+        assert cfg.dexscreener_timeout >= 0.1
+        assert cfg.trending_timeout >= 0.1
+    finally:
+        for k in keys:
+            if saved[k] is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = saved[k]
+
+
+def test_config_ag402_network_env_var():
+    """AG402_NETWORK should be the primary env var (not X402_NETWORK)."""
+    from rugcheck.config import load_config
+    import os
+
+    saved_ag = os.environ.get("AG402_NETWORK")
+    saved_x4 = os.environ.get("X402_NETWORK")
+    try:
+        os.environ["AG402_NETWORK"] = "mainnet-beta"
+        os.environ.pop("X402_NETWORK", None)
+        cfg = load_config()
+        assert cfg.ag402_network == "mainnet-beta"
+    finally:
+        if saved_ag is None:
+            os.environ.pop("AG402_NETWORK", None)
+        else:
+            os.environ["AG402_NETWORK"] = saved_ag
+        if saved_x4 is None:
+            os.environ.pop("X402_NETWORK", None)
+        else:
+            os.environ["X402_NETWORK"] = saved_x4

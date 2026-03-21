@@ -68,7 +68,7 @@ def _parse_rugcheck(raw: dict) -> dict:
     # lpLockedPct is ALREADY a percentage (99.59 = 99.59% locked). Do NOT multiply by 100.
     markets = raw.get("markets") or []
     if markets:
-        best = max(markets, key=lambda m: float((m.get("lp") or {}).get("quoteUSD") or 0))
+        best = max(markets, key=lambda m: _safe_float((m.get("lp") or {}).get("quoteUSD")) or 0.0)
         lp_info = best.get("lp") or {}
         lp_locked_pct = _safe_float(lp_info.get("lpLockedPct"))
         if lp_locked_pct is not None:
@@ -77,7 +77,7 @@ def _parse_rugcheck(raw: dict) -> dict:
     # Top holders — pct is ALREADY a percentage (7.64 = 7.64%), do NOT multiply by 100
     top_holders = raw.get("topHolders") or []
     if top_holders:
-        total_pct = sum(float(h.get("pct", 0)) for h in top_holders[:10])
+        total_pct = sum(_safe_float(h.get("pct")) or 0.0 for h in top_holders[:10])
         data["top10_holder_pct"] = round(total_pct, 2)
 
     # Total holders (may be 0 for large-cap tokens — treat 0 as None)

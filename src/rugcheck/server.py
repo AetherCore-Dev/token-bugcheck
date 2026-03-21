@@ -231,6 +231,8 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
         "last_open_time": 0.0,       # monotonic timestamp when breaker opened
         "threshold": cfg.circuit_breaker_threshold,
         "cooldown": cfg.circuit_breaker_cooldown,
+        "half_open": False,          # True while a single probe request is in-flight
+        "half_open_since": 0.0,      # monotonic timestamp when half-open started
     }
 
     # Rate limiters — differentiated for free vs paid (gateway) users
@@ -406,26 +408,48 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
     cb_lock = asyncio.Lock()
 
     async def _cb_is_open() -> bool:
-        """Return True if the circuit breaker is currently open (tripped)."""
+        """Return True if the circuit breaker is currently open (tripped).
+
+        Half-open logic: after cooldown expires, only ONE probe request is
+        allowed through. All other concurrent callers see the breaker as
+        open until the probe completes (preventing thundering herd).
+
+        Safety: if the probe coroutine is cancelled (client disconnect,
+        hard timeout) without calling record_failure/success, the
+        half_open flag auto-expires after ``cooldown`` seconds so the
+        breaker doesn't stay locked forever.
+        """
         async with cb_lock:
             if cb["consecutive_failures"] < cb["threshold"]:
                 return False
+            # A probe is already in-flight — block everyone else,
+            # UNLESS the probe has been stuck longer than cooldown (cancelled probe safety net).
+            if cb["half_open"]:
+                stuck = time.monotonic() - cb["half_open_since"]
+                if stuck < cb["cooldown"]:
+                    return True
+                # Probe was cancelled/lost — reset half_open and allow a new probe
+                logger.warning("[CB] half_open stuck for %.1fs — resetting (probe likely cancelled)", stuck)
+                cb["half_open"] = False
             # Breaker is tripped — check if cooldown has elapsed
             elapsed = time.monotonic() - cb["last_open_time"]
             if elapsed >= cb["cooldown"]:
-                # Allow one probe request (half-open)
-                cb["consecutive_failures"] = 0
+                # Allow exactly one probe request (half-open)
+                cb["half_open"] = True
+                cb["half_open_since"] = time.monotonic()
                 return False
             return True
 
     async def _cb_record_failure() -> None:
         async with cb_lock:
+            cb["half_open"] = False
             cb["consecutive_failures"] += 1
             if cb["consecutive_failures"] >= cb["threshold"]:
                 cb["last_open_time"] = time.monotonic()
 
     async def _cb_record_success() -> None:
         async with cb_lock:
+            cb["half_open"] = False
             cb["consecutive_failures"] = 0
 
     # ---- Versioned API routes (/v1/) ----

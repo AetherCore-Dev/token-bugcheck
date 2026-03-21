@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,18 @@ class AggregatedData(BaseModel):
     # Source tracking
     sources_succeeded: list[str] = Field(default_factory=list)
     sources_failed: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "top10_holder_pct", "liquidity_usd", "lp_burned_pct", "lp_locked_pct",
+        "price_usd", "volume_24h_usd", "rugcheck_score",
+        mode="before",
+    )
+    @classmethod
+    def _reject_non_finite(cls, v: float | None) -> float | None:
+        """Reject inf/NaN from upstream APIs — treat as missing data."""
+        if v is not None and (math.isinf(v) or math.isnan(v)):
+            return None
+        return v
 
 
 # ---------------------------------------------------------------------------

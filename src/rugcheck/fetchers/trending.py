@@ -93,16 +93,39 @@ class TrendingCache:
 # ---------------------------------------------------------------------------
 
 
+def _sanitize_text(val: str | None, *, max_len: int = 280) -> str | None:
+    """Strip control characters and cap length for external text fields."""
+    if not val or not isinstance(val, str):
+        return None
+    # Remove control chars (keep newlines/tabs for descriptions)
+    cleaned = "".join(c for c in val if c >= " " or c in "\n\t")
+    return cleaned[:max_len] or None
+
+
+def _sanitize_url(val: str | None) -> str | None:
+    """Only allow https:// URLs from DexScreener — reject javascript: / data: etc."""
+    if not val or not isinstance(val, str):
+        return None
+    val = val.strip()
+    if val.startswith("https://"):
+        return val[:2048]  # cap length
+    return None
+
+
 def _build_icon_url(icon_raw: str) -> str:
     """Build full CDN URL from DexScreener icon identifier.
 
     The boosted API returns short icon IDs (e.g. '_oTISsfbbH79Kpmp'),
     while the profiles API returns full URLs. Handle both cases.
+    Only allows https:// URLs from the DexScreener CDN domain.
     """
     if not icon_raw:
         return ""
+    if icon_raw.startswith("https://cdn.dexscreener.com/"):
+        return icon_raw[:2048]
     if icon_raw.startswith("http"):
-        return icon_raw
+        # Reject non-CDN URLs (SSRF prevention)
+        return ""
     return f"{ICON_CDN_BASE}/{icon_raw}?width=64&height=64&fit=crop&quality=95&format=auto"
 
 
@@ -141,11 +164,11 @@ async def fetch_trending_solana(
         icon_raw = item.get("icon", "")
         tokens.append(TrendingToken(
             mint_address=mint,
-            token_name=item.get("name"),
-            token_symbol=item.get("symbol"),
+            token_name=_sanitize_text(item.get("name"), max_len=80),
+            token_symbol=_sanitize_text(item.get("symbol"), max_len=20),
             icon_url=_build_icon_url(icon_raw) if icon_raw else None,
-            description=item.get("description"),
-            url=item.get("url"),
+            description=_sanitize_text(item.get("description"), max_len=280),
+            url=_sanitize_url(item.get("url")),
             boost_amount=item.get("totalAmount", 0),
         ))
 
@@ -179,9 +202,9 @@ async def fetch_trending_solana(
                     if token.mint_address in info_map:
                         name, symbol = info_map[token.mint_address]
                         if not token.token_name:
-                            token.token_name = name or None
+                            token.token_name = _sanitize_text(name, max_len=80)
                         if not token.token_symbol:
-                            token.token_symbol = symbol or None
+                            token.token_symbol = _sanitize_text(symbol, max_len=20)
         except Exception as exc:
             # Graceful degradation: enrichment failure is non-fatal
             logger.warning("[TRENDING] Token enrichment failed: %s", exc)
