@@ -1,6 +1,6 @@
 # Token RugCheck — Solana Token Safety Audit for AI Agents
 
-> **We're LIVE on Mainnet!** Try it now: [`https://rugcheck.aethercore.dev`](https://rugcheck.aethercore.dev)
+> **We're LIVE on Mainnet!** Try the interactive playground: [`https://rugcheck.aethercore.dev/playground`](https://rugcheck.aethercore.dev/playground)
 
 ```bash
 # Quick test — no setup needed

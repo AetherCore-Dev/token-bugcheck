@@ -573,6 +573,14 @@ def create_app(config: Config | None = None, aggregator: Aggregator | None = Non
 
     # ---- Operational endpoints (no versioning needed) ----
 
+    @app.get("/", response_class=HTMLResponse)
+    async def root():
+        """Root endpoint — redirect to playground."""
+        return HTMLResponse(
+            content='<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="refresh" content="0;url=/playground"><title>Redirecting...</title></head><body></body></html>',
+            status_code=200
+        )
+
     @app.get("/playground", response_class=HTMLResponse)
     async def playground():
         """API Playground — interactive testing page."""
