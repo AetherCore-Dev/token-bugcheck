@@ -163,7 +163,7 @@ body{transition:background .3s,color .3s}
 
 <div class="search-wrap">
   <div class="search-box" style="max-width:none;margin:0;padding:0">
-    <input id="mint" type="text" placeholder="Enter Solana mint address…" spellcheck="false" autocomplete="off">
+    <input id="mint" type="text" placeholder="Enter Solana mint address…" spellcheck="false" autocomplete="off" aria-label="Solana mint address input">
     <button id="btn" onclick="doAudit()">Audit</button>
   </div>
   <div id="history" class="history-dropdown"></div>
@@ -176,7 +176,7 @@ body{transition:background .3s,color .3s}
 
 <div id="trending" class="trending" style="display:none"></div>
 
-<div id="status" class="status"></div>
+<div id="status" class="status" aria-live="polite" aria-atomic="true"></div>
 <div id="result" class="result"></div>
 
 <div class="code-section">
@@ -232,7 +232,10 @@ function toggleTheme() {
 }
 function updateThemeIcon(theme) {
   const svg = document.getElementById('themeIcon');
-  svg.innerHTML = '<path d="' + (theme === 'dark' ? sunPath : moonPath) + '"/>';
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', theme === 'dark' ? sunPath : moonPath);
+  svg.innerHTML = '';
+  svg.appendChild(path);
 }
 initTheme();
 
@@ -257,8 +260,10 @@ function showTab(i) {
 }
 
 function riskColor(level) {
+  const VALID = ['SAFE','LOW','MEDIUM','HIGH','CRITICAL'];
+  if (!VALID.includes(level)) return 'var(--muted)';
   const m = {SAFE:'var(--green)',LOW:'var(--green)',MEDIUM:'var(--yellow)',HIGH:'var(--orange)',CRITICAL:'var(--red)'};
-  return m[level] || 'var(--muted)';
+  return m[level];
 }
 
 /* ---------- Trending tokens ---------- */
@@ -280,7 +285,7 @@ function renderTrendingTokens(tokens) {
   let html = '<div class="trending-hdr">\u{1F525} Trending</div><div class="trending-row">';
   tokens.forEach(t => {
     const iconHtml = t.icon_url
-      ? '<img class="trending-icon" src="' + esc(t.icon_url) + '" alt="" loading="lazy" onerror="this.style.display=\'none\'">'
+      ? '<img class="trending-icon" src="' + esc(t.icon_url) + '" alt="" loading="lazy" data-hide-on-error>'
       : '<div class="trending-icon"></div>';
     html += '<div class="trending-card" data-mint="' + esc(t.mint_address) + '">'
       + iconHtml
@@ -291,6 +296,9 @@ function renderTrendingTokens(tokens) {
   });
   html += '</div>';
   box.innerHTML = html;
+  box.querySelectorAll('[data-hide-on-error]').forEach(img => {
+    img.addEventListener('error', () => { img.style.display = 'none'; });
+  });
   box.querySelectorAll('.trending-card').forEach(card => {
     card.addEventListener('click', () => {
       const addr = card.getAttribute('data-mint');
@@ -392,7 +400,7 @@ function renderReport(r) {
     ['Mintable', fmt(ev.is_mintable)],
     ['Freezable', fmt(ev.is_freezable)],
     ['Closable', fmt(ev.is_closable)],
-    ['RugCheck Score', ev.rugcheck_score != null ? ev.rugcheck_score.toFixed(0) : '—'],
+    ['RugCheck Score', typeof ev.rugcheck_score==='number'&&!isNaN(ev.rugcheck_score)?ev.rugcheck_score.toFixed(0):'—'],
     ['Pair Created', ev.pair_created_at || '—'],
   ];
 
@@ -404,7 +412,7 @@ function renderReport(r) {
     </div>
     <div class="token-info">
       <span>${esc(ev.token_name)||'—'} <strong>(${esc(ev.token_symbol)||'—'})</strong></span>
-      <span>${esc(r.contract_address.slice(0,8))}…${esc(r.contract_address.slice(-6))}</span>
+      <span>${r.contract_address?esc(r.contract_address.slice(0,8))+'…'+esc(r.contract_address.slice(-6)):'—'}</span>
       ${r.degraded ? '<span style="color:var(--yellow)">⚠ Degraded</span>' : ''}
     </div>
     <div class="card">
@@ -423,7 +431,7 @@ function renderReport(r) {
       <div class="meta">
         <span>Sources: ${esc((m.data_sources||[]).join(', '))||'—'}</span>
         <span>Completeness: ${esc(m.data_completeness)}</span>
-        <span>Response: ${m.response_time_ms}ms</span>
+        <span>Response: ${m.response_time_ms!=null?m.response_time_ms+'ms':'?ms'}</span>
         ${m.cache_hit ? '<span>Cached</span>' : ''}
       </div>
     </div>
@@ -463,8 +471,10 @@ function clearHistory() {
   hideHistory();
 }
 function riskBg(level) {
+  const VALID = ['SAFE','LOW','MEDIUM','HIGH','CRITICAL'];
+  if (!VALID.includes(level)) return 'rgba(100,116,139,.1)';
   const m = {SAFE:'rgba(16,185,129,.15)',LOW:'rgba(16,185,129,.15)',MEDIUM:'rgba(245,158,11,.15)',HIGH:'rgba(249,115,22,.15)',CRITICAL:'rgba(239,68,68,.15)'};
-  return m[level] || 'rgba(100,116,139,.1)';
+  return m[level];
 }
 function renderHistory(filter) {
   const box = document.getElementById('history');
