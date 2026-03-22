@@ -164,6 +164,8 @@ ag402 pay https://rugcheck.aethercore.dev/v1/audit/DezXAZ8z7PnrnRJjz3wXBoRgixCa6
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | GET | `/v1/audit/{mint_address}` | USDC payment | Full safety audit report |
+| GET | `/v1/trending` | None | Trending tokens from DexScreener |
+| GET | `/playground` | None | Interactive web UI — audit tokens in the browser |
 | GET | `/health` | None | Service health + upstream status |
 | GET | `/stats` | Loopback only | Request counts + cache hit rate |
 | GET | `/metrics` | Loopback only | Prometheus metrics |
@@ -445,6 +447,7 @@ src/rugcheck/
 - **Production hardening** — `/docs`, `/redoc`, `/openapi.json` disabled
 - **Gateway fail-safe** — refuses to start if payment verifier fails in production
 - **Graceful degradation** — free-tier proxy failure falls through to 402 payment path
+- **CSP-hardened playground** — zero inline event handlers, all user data escaped, whitelist-validated CSS injection points
 - **Cache isolation** — deep-copy on get/set prevents shared state corruption
 - **Degraded short-TTL** — incomplete reports cached only 10s
 - **Prometheus path normalization** — prevents cardinality explosion

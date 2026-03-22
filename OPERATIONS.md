@@ -572,6 +572,43 @@ curl -s http://localhost:8000/health
 
 ---
 
+### v0.2.1 Playground CSP 加固 + 全面修复 (2026-03)
+
+消除所有 inline event handler，修复 badge 背景 CSS bug，加强 XSS 防御，提升无障碍和 UX：
+
+| # | 修改内容 | 文件 | 类型 | 说明 |
+|---|----------|------|------|------|
+| S23 | **消除全部 inline onclick (9 处)** | `playground.html` | 🔴 安全 | `onclick="toggleTheme()"` 等 9 处 inline handler 全部替换为 `data-*` + `addEventListener`。页面 0 个 inline event handler；若将 `<script>` 提取为外部文件，可进一步收紧 CSP 移除 `'unsafe-inline'` |
+| S24 | **pair_created_at XSS 修复** | `playground.html` | 🔴 安全 | `ev.pair_created_at` 从 API 返回的字符串直接注入 HTML 未经转义；改为 `esc(ev.pair_created_at)` |
+| S25 | **risk_score / response_time_ms 类型检查** | `playground.html` | 🟡 安全 | `a.risk_score` 和 `m.response_time_ms` 添加 `typeof === 'number'` 校验，防止恶意 API 响应注入 HTML |
+| S26 | **badge 背景 CSS 修复** | `playground.html` | 🟡 修复 | `background:${color}22` 在 `riskColor()` 返回 CSS 变量时生成无效 CSS（如 `var(--green)22`）；新增 `riskBgLight()` 函数返回正确的 `rgba()` 背景色 |
+| S27 | **SVG innerHTML 替换为 replaceChildren** | `playground.html` | 🟢 安全 | `svg.innerHTML = ''` 替换为 `svg.replaceChildren(path)`，避免 innerHTML 在 SVG 上下文中的潜在风险 |
+| S28 | **history addr 转义** | `playground.html` | 🟢 安全 | 搜索历史中截断的地址字符串 `x.address.slice(0,6)` 补充 `esc()` 转义 |
+| S29 | **外部链接 rel=noopener** | `playground.html` | 🟢 安全 | GitHub 外链添加 `rel="noopener noreferrer"` |
+| F12 | **搜索历史键盘导航** | `playground.html` | 🔧 功能 | 支持 ArrowDown/ArrowUp 在历史条目间移动，Enter 选中当前高亮条目 |
+| F13 | **输入防抖** | `playground.html` | 🔧 优化 | 搜索历史过滤增加 50ms debounce，减少高频 DOM 重建 |
+| F14 | **Trending 自动刷新** | `playground.html` | 🔧 功能 | 通过 `visibilitychange` API 在标签页恢复可见且距上次加载 >5 分钟时自动刷新 trending 数据 |
+| D15 | **meta description** | `playground.html` | 📖 SEO | 添加 `<meta name="description">` 标签 |
+
+---
+
+### v0.1.8 Playground 主题切换 + 搜索历史 (2026-03)
+
+Playground UI 新增暗色/亮色主题切换和搜索历史功能，同步进行首轮安全加固：
+
+| # | 修改内容 | 文件 | 类型 | 说明 |
+|---|----------|------|------|------|
+| F9 | **暗色/亮色主题切换** | `playground.html` | 🔧 功能 | CSS 自定义属性实现主题系统，`[data-theme="light"]` 选择器覆盖暗色变量。`localStorage` 持久化主题偏好，首次加载自动匹配系统偏好 (`prefers-color-scheme`) |
+| F10 | **搜索历史** | `playground.html` | 🔧 功能 | 最近 10 次审计记录保存到 `localStorage`，输入框 focus 时展示下拉列表，支持按地址/名称/符号过滤，单条删除和清空 |
+| S20 | **riskColor / riskBg 白名单验证** | `playground.html` | 🔴 安全 | 防止恶意 API 数据通过 `style="color:${...}"` 注入 CSS；只允许 SAFE/LOW/MEDIUM/HIGH/CRITICAL，其他值返回安全默认色 |
+| S21 | **img onerror 改用 addEventListener** | `playground.html` | 🟡 安全 | trending 卡片图片的 `onerror` 从 inline 改为 `data-hide-on-error` + DOM 事件监听 |
+| S22 | **SVG createElementNS** | `playground.html` | 🟡 安全 | 主题图标 SVG 路径用 `document.createElementNS()` 创建，替代 innerHTML 字符串拼接 |
+| A1 | **API 字段 null 检查** | `playground.html` | 🟡 健壮性 | `rugcheck_score`/`contract_address`/`response_time_ms` 添加 null/NaN/类型检查，防止 API 降级时 UI 报错 |
+| A2 | **ARIA 无障碍** | `playground.html` | 🟢 可访问性 | 输入框添加 `aria-label`，状态区域添加 `aria-live="polite"` |
+| A3 | **移动端响应式** | `playground.html` | 🟢 UX | `@media(max-width:480px)` 断点调整主题按钮尺寸和标题大小 |
+
+---
+
 ### v0.1.7 适配 ag402 v0.1.17 — 幂等预付费 + 安全加固 (2026-03)
 
 升级 ag402 依赖至 v0.1.17，获得 TOCTOU 修复和预付费幂等性支持：
@@ -654,6 +691,8 @@ curl -s http://localhost:8000/health
 
 | 日期 | 版本 | 操作 | 备注 |
 |------|------|------|------|
+| 2026-03-23 | v0.2.1 (pending) | 未提交 | CSP 加固：消除全部 inline onclick、badge CSS 修复、pair_created_at XSS 修复、键盘导航、防抖、trending 自动刷新 |
+| 2026-03-23 | v0.1.8 (`9fd5eaa`) | 从 `08541d3` 升级 | playground 主题切换 + 搜索历史 + 首轮安全加固。所有 4 层验证通过 |
 | 2026-03-14 | v0.1.7 (`b4485ff`) | 从 `f68a5ce` 升级 | ag402 0.1.19, `RUGCHECK_PRODUCTION=true` + `UVLOOP_INSTALL=0` 已加入 .env, mainnet 支付测试通过 (BONK 审计 $0.02), HTTPS 域名待修复 (Cloudflare DNS 问题) |
 
 ---

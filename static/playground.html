@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Interactive Solana token security audit. Paste a mint address to get instant rug-pull risk analysis powered by GoPlus, RugCheck & DexScreener.">
 <title>Token RugCheck — API Playground</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -126,6 +127,7 @@ a{color:var(--accent);text-decoration:none}
 .history-clear{color:var(--red);cursor:pointer;font-size:12px;opacity:.7}
 .history-clear:hover{opacity:1}
 .history-empty{padding:16px;text-align:center;color:var(--muted);font-size:13px}
+.history-item.active{background:var(--bg)}
 
 /* ---- Theme toggle button ---- */
 .header{position:relative}
@@ -156,7 +158,7 @@ body{transition:background .3s,color .3s}
 <div class="header">
   <h1>Token <span>RugCheck</span> Playground</h1>
   <p>Paste a Solana token mint address to get an instant security audit</p>
-  <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme" id="themeBtn">
+  <button class="theme-toggle" aria-label="Toggle theme" id="themeBtn">
     <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
   </button>
 </div>
@@ -164,14 +166,14 @@ body{transition:background .3s,color .3s}
 <div class="search-wrap">
   <div class="search-box" style="max-width:none;margin:0;padding:0">
     <input id="mint" type="text" placeholder="Enter Solana mint address…" spellcheck="false" autocomplete="off" aria-label="Solana mint address input">
-    <button id="btn" onclick="doAudit()">Audit</button>
+    <button id="btn">Audit</button>
   </div>
   <div id="history" class="history-dropdown"></div>
 </div>
 <div class="examples">
-  Try: <a onclick="tryExample('JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN')">JUP</a>
-  <a onclick="tryExample('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')">USDC</a>
-  <a onclick="tryExample('So11111111111111111111111111111111111111112')">SOL</a>
+  Try: <a data-example="JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN">JUP</a>
+  <a data-example="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v">USDC</a>
+  <a data-example="So11111111111111111111111111111111111111112">SOL</a>
 </div>
 
 <div id="trending" class="trending" style="display:none"></div>
@@ -182,9 +184,9 @@ body{transition:background .3s,color .3s}
 <div class="code-section">
   <h2>Integrate via API</h2>
   <div class="code-tabs">
-    <div class="code-tab active" onclick="showTab(0)">cURL</div>
-    <div class="code-tab" onclick="showTab(1)">Python</div>
-    <div class="code-tab" onclick="showTab(2)">JavaScript</div>
+    <div class="code-tab active" data-tab="0">cURL</div>
+    <div class="code-tab" data-tab="1">Python</div>
+    <div class="code-tab" data-tab="2">JavaScript</div>
   </div>
   <div id="code0" class="code-block">curl -s https://rugcheck.aethercore.dev/v1/audit/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN</div>
   <div id="code1" class="code-block" style="display:none">import httpx
@@ -203,7 +205,7 @@ console.log(`Risk: ${report.action.risk_level} (${report.action.risk_score}/100)
 
 <div class="footer">
   Token RugCheck — x402-native Solana token security audit API<br>
-  <a href="https://github.com/allenenli/token-rugcheck" target="_blank">GitHub</a> · Powered by GoPlus, RugCheck, DexScreener
+  <a href="https://github.com/allenenli/token-rugcheck" target="_blank" rel="noopener noreferrer">GitHub</a> · Powered by GoPlus, RugCheck, DexScreener
 </div>
 
 <script>
@@ -234,8 +236,7 @@ function updateThemeIcon(theme) {
   const svg = document.getElementById('themeIcon');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('d', theme === 'dark' ? sunPath : moonPath);
-  svg.innerHTML = '';
-  svg.appendChild(path);
+  svg.replaceChildren(path);
 }
 initTheme();
 
@@ -263,6 +264,12 @@ function riskColor(level) {
   const VALID = ['SAFE','LOW','MEDIUM','HIGH','CRITICAL'];
   if (!VALID.includes(level)) return 'var(--muted)';
   const m = {SAFE:'var(--green)',LOW:'var(--green)',MEDIUM:'var(--yellow)',HIGH:'var(--orange)',CRITICAL:'var(--red)'};
+  return m[level];
+}
+function riskBgLight(level) {
+  const VALID = ['SAFE','LOW','MEDIUM','HIGH','CRITICAL'];
+  if (!VALID.includes(level)) return 'rgba(100,116,139,.08)';
+  const m = {SAFE:'rgba(16,185,129,.08)',LOW:'rgba(16,185,129,.08)',MEDIUM:'rgba(245,158,11,.08)',HIGH:'rgba(249,115,22,.08)',CRITICAL:'rgba(239,68,68,.08)'};
   return m[level];
 }
 
@@ -401,12 +408,12 @@ function renderReport(r) {
     ['Freezable', fmt(ev.is_freezable)],
     ['Closable', fmt(ev.is_closable)],
     ['RugCheck Score', typeof ev.rugcheck_score==='number'&&!isNaN(ev.rugcheck_score)?ev.rugcheck_score.toFixed(0):'—'],
-    ['Pair Created', ev.pair_created_at || '—'],
+    ['Pair Created', ev.pair_created_at ? esc(ev.pair_created_at) : '—'],
   ];
 
   result.innerHTML = `
     <div class="gauge">
-      <div class="gauge-circle" style="border-color:${color};color:${color}">${a.risk_score}</div>
+      <div class="gauge-circle" style="border-color:${color};color:${color}">${typeof a.risk_score==='number'?a.risk_score:'—'}</div>
       <div class="gauge-label" style="color:${color}">${esc(a.risk_level)}</div>
       <div class="gauge-sublabel">${a.is_safe ? 'Appears Safe' : 'Caution Advised'}</div>
     </div>
@@ -416,7 +423,7 @@ function renderReport(r) {
       ${r.degraded ? '<span style="color:var(--yellow)">⚠ Degraded</span>' : ''}
     </div>
     <div class="card">
-      <h3>Analysis <span class="badge" style="background:${color}22;color:${color}">${esc(a.risk_level)}</span></h3>
+      <h3>Analysis <span class="badge" style="background:${riskBgLight(a.risk_level)};color:${color}">${esc(a.risk_level)}</span></h3>
       <p style="color:var(--muted);font-size:14px;line-height:1.6;margin-bottom:14px">${esc(an.summary)}</p>
       <div class="flags">${flagsHtml}</div>
     </div>
@@ -431,7 +438,7 @@ function renderReport(r) {
       <div class="meta">
         <span>Sources: ${esc((m.data_sources||[]).join(', '))||'—'}</span>
         <span>Completeness: ${esc(m.data_completeness)}</span>
-        <span>Response: ${m.response_time_ms!=null?m.response_time_ms+'ms':'?ms'}</span>
+        <span>Response: ${typeof m.response_time_ms==='number'?m.response_time_ms+'ms':'?ms'}</span>
         ${m.cache_hit ? '<span>Cached</span>' : ''}
       </div>
     </div>
@@ -442,7 +449,11 @@ function renderReport(r) {
 }
 
 document.getElementById('mint').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { hideHistory(); doAudit(); }
+  if (e.key === 'Enter') {
+    const box = document.getElementById('history');
+    if (box.classList.contains('show') && historyIdx >= 0) return; /* handled by arrow-key listener */
+    hideHistory(); doAudit();
+  }
   if (e.key === 'Escape') hideHistory();
 });
 
@@ -487,7 +498,7 @@ function renderHistory(filter) {
   if (!h.length) { box.innerHTML = '<div class="history-empty">No matches</div>'; box.classList.add('show'); return; }
   let html = '';
   h.forEach(x => {
-    const addr = x.address.slice(0,6) + '\u2026' + x.address.slice(-4);
+    const addr = esc(x.address.slice(0,6)) + '\u2026' + esc(x.address.slice(-4));
     const label = x.name ? esc(x.name) + (x.symbol ? ' <span style="color:var(--muted)">(' + esc(x.symbol) + ')</span>' : '') : '';
     const rc = riskColor(x.risk_level);
     const rb = riskBg(x.risk_level);
@@ -498,7 +509,7 @@ function renderHistory(filter) {
       '<span class="history-del" data-del="' + esc(x.address) + '">&times;</span>' +
       '</div>';
   });
-  html += '<div class="history-footer"><span>' + h.length + ' recent</span><span class="history-clear" onclick="clearHistory()">Clear all</span></div>';
+  html += '<div class="history-footer"><span>' + h.length + ' recent</span><span class="history-clear">Clear all</span></div>';
   box.innerHTML = html;
   box.querySelectorAll('.history-item').forEach(item => {
     item.addEventListener('click', () => { tryExample(item.dataset.addr); });
@@ -506,14 +517,68 @@ function renderHistory(filter) {
   box.querySelectorAll('.history-del').forEach(btn => {
     btn.addEventListener('click', e => { e.stopPropagation(); removeHistoryItem(btn.dataset.del); });
   });
+  const clearBtn = box.querySelector('.history-clear');
+  if (clearBtn) clearBtn.addEventListener('click', clearHistory);
   box.classList.add('show');
+  historyIdx = -1;
 }
 function hideHistory() { document.getElementById('history').classList.remove('show'); }
 
+/* ---- Event listeners (no inline handlers) ---- */
+document.getElementById('themeBtn').addEventListener('click', toggleTheme);
+document.getElementById('btn').addEventListener('click', doAudit);
+document.querySelectorAll('[data-example]').forEach(a => {
+  a.addEventListener('click', () => { tryExample(a.dataset.example); });
+});
+document.querySelectorAll('[data-tab]').forEach(tab => {
+  tab.addEventListener('click', () => { showTab(Number(tab.dataset.tab)); });
+});
+
+/* ---- History: focus / input / outside-click ---- */
+let debounceTimer = null;
+let historyIdx = -1;
+
 document.getElementById('mint').addEventListener('focus', () => { renderHistory(document.getElementById('mint').value.trim()); });
-document.getElementById('mint').addEventListener('input', e => { renderHistory(e.target.value.trim()); });
+document.getElementById('mint').addEventListener('input', e => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { renderHistory(e.target.value.trim()); }, 50);
+});
 document.addEventListener('click', e => {
   if (!e.target.closest('.search-wrap')) hideHistory();
+});
+
+/* ---- History keyboard navigation ---- */
+document.getElementById('mint').addEventListener('keydown', e => {
+  const box = document.getElementById('history');
+  if (!box.classList.contains('show')) return;
+  const items = box.querySelectorAll('.history-item');
+  if (!items.length) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    historyIdx = Math.min(historyIdx + 1, items.length - 1);
+    items.forEach((it, i) => it.classList.toggle('active', i === historyIdx));
+    items[historyIdx].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    historyIdx = Math.max(historyIdx - 1, 0);
+    items.forEach((it, i) => it.classList.toggle('active', i === historyIdx));
+    items[historyIdx].scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter' && historyIdx >= 0 && historyIdx < items.length) {
+    e.preventDefault();
+    tryExample(items[historyIdx].dataset.addr);
+  }
+});
+
+/* ---- Trending: auto-refresh on tab visibility ---- */
+let lastTrendingLoad = Date.now();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Date.now() - lastTrendingLoad > 300000) {
+    lastTrendingLoad = Date.now();
+    fetch(API + '/v1/trending')
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(data => renderTrendingTokens(data.tokens))
+      .catch(() => {});
+  }
 });
 </script>
 </body>
